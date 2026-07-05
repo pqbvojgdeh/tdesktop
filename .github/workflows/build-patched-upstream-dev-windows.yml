@@ -1,0 +1,760 @@
+name: Build patched upstream dev Windows x64 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Optional full official telegramdesktop/tdesktop commit SHA to build instead of upstream-dev HEAD.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patched-upstream-dev-windows-release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Validate trigger
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Accept build request
+        run: echo "Build request accepted."
+
+  source:
+    name: Pin upstream-dev source revision
+    needs:
+      - gate
+    if: ${{ needs.gate.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+      short_sha: ${{ steps.pin.outputs.short_sha }}
+      source_repository: ${{ steps.pin.outputs.source_repository }}
+      official_sha: ${{ steps.pin.outputs.official_sha }}
+      source_is_current: ${{ steps.pin.outputs.source_is_current }}
+
+    steps:
+      - name: Pin one source SHA for the whole workflow
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          requested_sha="${{ github.event.inputs.source_sha || '' }}"
+          source_repository="$GITHUB_REPOSITORY"
+          source_label="upstream-dev"
+          source_is_current=false
+
+          official_sha="$(
+            git ls-remote \
+              https://github.com/telegramdesktop/tdesktop.git \
+              refs/heads/dev |
+            awk '{ print $1 }'
+          )"
+
+          if [[ -n "$requested_sha" ]]; then
+            if [[ ! "$requested_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Manual source_sha must be a full 40-character Git SHA."
+              exit 1
+            fi
+
+            git init verify-source >/dev/null
+            git -C verify-source remote add official https://github.com/telegramdesktop/tdesktop.git
+            git -C verify-source fetch --depth=1 official "$requested_sha"
+
+            source_sha="$requested_sha"
+            source_repository="telegramdesktop/tdesktop"
+            source_label="manual official commit"
+          else
+            source_sha="$(
+              git ls-remote \
+                "https://github.com/$GITHUB_REPOSITORY.git" \
+                refs/heads/upstream-dev |
+              awk '{ print $1 }'
+            )"
+
+            if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Could not resolve fork upstream-dev SHA."
+              exit 1
+            fi
+
+            if [[ "$official_sha" =~ ^[0-9a-f]{40}$ && "$source_sha" == "$official_sha" ]]; then
+              source_is_current=true
+            elif [[ "$official_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::warning::upstream-dev is behind the current official dev head."
+              echo "::warning::Building the pinned, already-reviewed mirror commit."
+            else
+              echo "::warning::Could not resolve the current official dev SHA."
+              official_sha=""
+            fi
+          fi
+
+          short_sha="${source_sha:0:7}"
+
+          {
+            echo "source_sha=$source_sha"
+            echo "short_sha=$short_sha"
+            echo "source_repository=$source_repository"
+            echo "official_sha=$official_sha"
+            echo "source_is_current=$source_is_current"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Pinned source"
+            echo
+            echo "- source: \`$source_sha\`"
+            echo "- source repository: \`$source_repository\`"
+            echo "- source mode: \`$source_label\`"
+            if [[ -n "$official_sha" ]]; then
+              echo "- current official dev: \`$official_sha\`"
+            fi
+            echo "- mirror is current: \`$source_is_current\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare_dependencies:
+    name: Prepare and cache Qt / ThirdParty dependencies
+    needs:
+      - gate
+      - source
+    if: >-
+      ${{
+        needs.gate.result == 'success' &&
+        needs.source.result == 'success'
+      }}
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 360
+
+    outputs:
+      cache_key: ${{ steps.cache_key.outputs.cache_key }}
+      sdk: ${{ steps.cache_key.outputs.sdk }}
+
+    env:
+      PREPARE_PATH: Telegram/build/prepare/prepare.py
+      REPO_NAME: tdesktop
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Prepare TBuild directories
+        run: |
+          if not exist %userprofile%\TBuild\Libraries mkdir %userprofile%\TBuild\Libraries
+          if exist %GITHUB_WORKSPACE%\TBuild rmdir %GITHUB_WORKSPACE%\TBuild
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      - name: Checkout pinned source commit
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.source.outputs.source_repository }}
+          ref: ${{ needs.source.outputs.source_sha }}
+          fetch-depth: 1
+          submodules: recursive
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+
+      - name: Verify pinned source
+        shell: bash
+        env:
+          PINNED_SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
+          checked_out_sha="$(git -C "$source_dir" rev-parse HEAD)"
+
+          if [[ "$checked_out_sha" != "$PINNED_SOURCE_SHA" ]]; then
+            echo "::error::Dependency job checked out a different source SHA."
+            exit 1
+          fi
+
+          git -C "$source_dir" log -1 --format='%H%n%ci%n%s'
+
+      - name: Read SDK requirement and compute dependency cache key
+        id: cache_key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
+          doc="$source_dir/docs/building-win.md"
+
+          sdk="$(
+            grep "SDK version" "$doc" |
+            sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/'
+          )"
+
+          if [[ -z "$sdk" ]]; then
+            echo "::error::Could not detect Windows SDK version."
+            exit 1
+          fi
+
+          {
+            sha256sum "$source_dir/$PREPARE_PATH" | awk '{ print $1 }'
+            echo "$sdk"
+            echo "vs2026"
+            echo "qt6"
+            echo "dependency-cache-v2"
+          } > CACHE_KEY.txt
+
+          cache_key="$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')"
+
+          echo "SDK=$sdk" >> "$GITHUB_ENV"
+          echo "CACHE_KEY=$cache_key" >> "$GITHUB_ENV"
+          echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+          echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
+
+          echo "Dependency cache key: $cache_key"
+
+      - name: Ensure ATL for MSVC 14.44
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installerRoot = Join-Path `
+            ${env:ProgramFiles(x86)} `
+            "Microsoft Visual Studio\Installer"
+
+          $vswhere = Join-Path $installerRoot "vswhere.exe"
+          $setup = Join-Path $installerRoot "setup.exe"
+
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe was not found: $vswhere"
+          }
+
+          if (-not (Test-Path $setup)) {
+            throw "Visual Studio setup.exe was not found: $setup"
+          }
+
+          $vsPath = (
+            & $vswhere `
+              -latest `
+              -products * `
+              -version "[18.0,19.0)" `
+              -property installationPath |
+              Select-Object -First 1
+          )
+
+          if ([string]::IsNullOrWhiteSpace($vsPath)) {
+            throw "Visual Studio 2026 installation was not found."
+          }
+
+          $atlPattern = Join-Path `
+            $vsPath `
+            "VC\Tools\MSVC\14.44.*\atlmfc\include\atlbase.h"
+
+          $atlHeader = Get-Item `
+            -Path $atlPattern `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $atlHeader) {
+            $arguments = @(
+              "modify"
+              "--installPath"
+              "`"$vsPath`""
+              "--add"
+              "Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL"
+              "--quiet"
+              "--norestart"
+            )
+
+            $process = Start-Process `
+              -FilePath $setup `
+              -ArgumentList $arguments `
+              -Wait `
+              -PassThru
+
+            if ($process.ExitCode -notin @(0, 3010)) {
+              throw "ATL installation failed with exit code $($process.ExitCode)"
+            }
+
+            for ($attempt = 1; $attempt -le 12; $attempt++) {
+              $atlHeader = Get-Item `
+                -Path $atlPattern `
+                -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+
+              if ($atlHeader) {
+                break
+              }
+
+              Start-Sleep -Seconds 5
+            }
+          }
+
+          if (-not $atlHeader) {
+            throw "ATL for MSVC 14.44 is still missing."
+          }
+
+          Write-Host "ATL header: $($atlHeader.FullName)"
+
+      - name: Initialize MSVC x64 environment
+        uses: Eden-CI/msvc-dev-cmd@master
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+          toolset: 14.44
+
+      - name: Verify compiler and SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not $env:VisualStudioVersion.StartsWith("18.")) {
+            throw "Visual Studio 2026 was not initialized."
+          }
+
+          $atlHeader = Join-Path `
+            $env:VCToolsInstallDir `
+            "atlmfc\include\atlbase.h"
+
+          if (-not (Test-Path $atlHeader)) {
+            throw "ATL header was not found: $atlHeader"
+          }
+
+          Write-Host "VisualStudioVersion=$env:VisualStudioVersion"
+          Write-Host "VCToolsVersion=$env:VCToolsVersion"
+          Write-Host "WindowsSDKVersion=$env:WindowsSDKVersion"
+          Write-Host "ATL=$atlHeader"
+
+      - name: Free runner disk before dependency build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          function Get-FreeGiB {
+            [math]::Round((Get-PSDrive -Name C).Free / 1GB, 2)
+          }
+
+          $before = Get-FreeGiB
+          Write-Host "Free disk before cleanup: $before GiB"
+
+          $servicePattern = "SQL|Postgre|MySQL|Mongo|Cosmos"
+
+          Get-Service |
+            Where-Object {
+              $_.Status -ne "Stopped" -and
+              (
+                $_.Name -match $servicePattern -or
+                $_.DisplayName -match $servicePattern
+              )
+            } |
+            Stop-Service -Force -ErrorAction SilentlyContinue
+
+          $removePaths = @(
+            "C:\Android",
+            "C:\Program Files (x86)\Android",
+            "C:\hostedtoolcache\windows\CodeQL",
+            "C:\Program Files\dotnet\sdk",
+            "C:\Program Files\Microsoft SQL Server",
+            "C:\Program Files (x86)\Microsoft SQL Server",
+            "C:\Program Files\PostgreSQL",
+            "C:\Program Files\MySQL",
+            "C:\Program Files\MongoDB",
+            "C:\Program Files\Azure Cosmos DB Emulator",
+            "C:\ProgramData\Microsoft\VisualStudio\Packages",
+            "C:\ProgramData\Package Cache"
+          )
+
+          foreach ($path in $removePaths) {
+            if (Test-Path $path) {
+              Write-Host "Removing $path"
+              & cmd.exe /d /c "rd /s /q `"$path`""
+            }
+          }
+
+          Remove-Item `
+            "$env:TEMP\*", `
+            "$env:LOCALAPPDATA\Temp\*", `
+            "$env:USERPROFILE\.nuget\packages\*", `
+            "C:\Windows\Temp\*" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+
+          $after = Get-FreeGiB
+          Write-Host "Free disk after cleanup: $after GiB"
+          Write-Host "Freed by cleanup: $([math]::Round($after - $before, 2)) GiB"
+
+          if ($after -lt 18) {
+            throw "Less than 18 GiB is free before dependency preparation."
+          }
+
+      - name: Configure NuGet sources
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      - name: Restore ThirdParty dependency cache
+        id: thirdparty
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-vs2026-upstream-dev-third-party-${{ steps.cache_key.outputs.cache_key }}
+          restore-keys: |
+            ${{ runner.OS }}-vs2026-upstream-dev-third-party-
+
+      - name: Restore Release libraries dependency cache
+        id: libraries
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-vs2026-upstream-dev-release-libs-${{ steps.cache_key.outputs.cache_key }}
+          restore-keys: |
+            ${{ runner.OS }}-vs2026-upstream-dev-release-libs-
+
+      - name: Restore Release Qt 6 dependency cache
+        id: qt
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-${{ steps.cache_key.outputs.cache_key }}
+          restore-keys: |
+            ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-
+
+      - name: Prepare Telegram Desktop dependencies
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 2
+          CMAKE_INSTALL_PARALLEL_LEVEL: 2
+          NUMBER_OF_PROCESSORS: 2
+        run: |
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent qt6
+
+      - name: Prune dependency source trees before caching
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find "$LibrariesPath" \
+            '(' \
+              '(' \
+                ! '(' \
+                  -name '*.lib' -o \
+                  -name '*.a' -o \
+                  -name '*.exe' -o \
+                  -name '*.h' -o \
+                  -name '*.hpp' -o \
+                  -name '*.inc' -o \
+                  -name '*.cmake' -o \
+                  -path '*/include/*' -o \
+                  -path '*/objects-*' -o \
+                  -path '*/cache_keys/*' -o \
+                  -path '*/patches/*' \
+                ')' \
+                -type f \
+              ')' \
+              -o -empty \
+            ')' -delete
+
+      - name: Verify prepared dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $required = @(
+            (Join-Path $env:TBUILD "ThirdParty"),
+            (Join-Path $env:LibrariesPath "cache_keys")
+          )
+
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Prepared dependency path was not found: $path"
+            }
+          }
+
+          $qtDirectories = Get-ChildItem `
+            -Path $env:LibrariesPath `
+            -Directory `
+            -ErrorAction Stop |
+            Where-Object { $_.Name -match "^(Qt|qt)[_-]" }
+
+          if (-not $qtDirectories) {
+            throw "Prepared Qt 6 directory was not found."
+          }
+
+          Write-Host "Prepared Qt directories:"
+          $qtDirectories |
+            Select-Object Name, FullName |
+            Format-Table -AutoSize
+
+      - name: Save ThirdParty dependency cache
+        if: steps.thirdparty.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-vs2026-upstream-dev-third-party-${{ steps.cache_key.outputs.cache_key }}
+
+      - name: Save Release libraries dependency cache
+        if: steps.libraries.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-vs2026-upstream-dev-release-libs-${{ steps.cache_key.outputs.cache_key }}
+
+      - name: Save Release Qt 6 dependency cache
+        if: steps.qt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-${{ steps.cache_key.outputs.cache_key }}
+
+      - name: Summarize dependency preparation
+        shell: bash
+        run: |
+          {
+            echo "## Dependency preparation completed"
+            echo
+            echo "- source: \`${{ needs.source.outputs.source_sha }}\`"
+            echo "- cache key: \`${{ steps.cache_key.outputs.cache_key }}\`"
+            echo "- ThirdParty exact hit: \`${{ steps.thirdparty.outputs.cache-hit }}\`"
+            echo "- libraries exact hit: \`${{ steps.libraries.outputs.cache-hit }}\`"
+            echo "- Qt exact hit: \`${{ steps.qt.outputs.cache-hit }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release_ninja_p2:
+    name: Reliable Release — Ninja / no LTO / parallel 2
+    needs:
+      - gate
+      - source
+      - prepare_dependencies
+    if: >-
+      ${{
+        needs.gate.result == 'success' &&
+        needs.source.result == 'success' &&
+        needs.prepare_dependencies.result == 'success'
+      }}
+    permissions:
+      contents: read
+
+    uses: ./.github/workflows/build-patched-upstream-dev-windows-profile.yml
+    secrets: inherit
+
+    with:
+      source_sha: ${{ needs.source.outputs.source_sha }}
+      source_repository: ${{ needs.source.outputs.source_repository }}
+      cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
+      runner: windows-2025-vs2026
+      profile: release-ninja-p2
+      profile_title: Reliable Release / Ninja Multi-Config / no IPO-LTO / parallel 2
+      generator: ninja
+      lto_mode: off
+      parallel: 2
+      require_vs2026: true
+
+  publish_release:
+    name: Publish reliable successful build
+    needs:
+      - gate
+      - source
+      - prepare_dependencies
+      - release_ninja_p2
+    if: >-
+      ${{
+        always() &&
+        needs.gate.result == 'success' &&
+        needs.source.result == 'success' &&
+        needs.prepare_dependencies.result == 'success' &&
+        (
+          needs.release_ninja_p2.outputs.built == 'true'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Select reliable successful artifact
+        id: select
+        shell: bash
+        env:
+          SHORT_SHA: ${{ needs.source.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+
+          profile="release-ninja-p2"
+          artifact_name="Telegram-dev-$SHORT_SHA-Windows-x64-$profile"
+
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+          echo "Selected artifact: $artifact_name"
+
+      - name: Download exact successful Windows package
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ steps.select.outputs.artifact_name }}
+          path: release-input
+
+      - name: Validate package metadata and checksum
+        id: metadata
+        shell: bash
+        env:
+          PINNED_SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+          SELECTED_PROFILE: ${{ steps.select.outputs.profile }}
+        run: |
+          set -euo pipefail
+
+          metadata="release-input/release-metadata.json"
+
+          if [[ ! -f "$metadata" ]]; then
+            echo "::error::release-metadata.json was not downloaded."
+            find release-input -maxdepth 3 -type f -print || true
+            exit 1
+          fi
+
+          source_sha="$(jq -r '.source_sha' "$metadata")"
+          short_sha="$(jq -r '.short_sha' "$metadata")"
+          profile="$(jq -r '.profile' "$metadata")"
+          build_parameters="$(jq -r '.build_parameters' "$metadata")"
+          archive_name="$(jq -r '.archive_name' "$metadata")"
+          checksum_name="$(jq -r '.checksum_name' "$metadata")"
+
+          if [[ "$source_sha" != "$PINNED_SOURCE_SHA" ]]; then
+            echo "::error::Artifact source SHA does not match the pinned source."
+            exit 1
+          fi
+
+          if [[ "$profile" != "$SELECTED_PROFILE" ]]; then
+            echo "::error::Artifact profile does not match the selected profile."
+            exit 1
+          fi
+
+          if [[ ! "$short_sha" =~ ^[0-9a-f]{7}$ ]]; then
+            echo "::error::Invalid short SHA in metadata."
+            exit 1
+          fi
+
+          if [[ -z "$build_parameters" || "$build_parameters" == "null" ]]; then
+            echo "::error::Build parameters are missing from metadata."
+            exit 1
+          fi
+
+          archive_path="release-input/$archive_name"
+          checksum_path="release-input/$checksum_name"
+
+          if [[ ! -f "$archive_path" || ! -f "$checksum_path" ]]; then
+            echo "::error::Release assets are missing."
+            find release-input -maxdepth 3 -type f -print || true
+            exit 1
+          fi
+
+          expected_hash="$(awk '{ print $1 }' "$checksum_path")"
+          actual_hash="$(sha256sum "$archive_path" | awk '{ print $1 }')"
+
+          if [[ "$actual_hash" != "$expected_hash" ]]; then
+            echo "::error::7z SHA256 verification failed."
+            exit 1
+          fi
+
+          {
+            echo "source_sha=$source_sha"
+            echo "short_sha=$short_sha"
+            echo "profile=$profile"
+            echo "build_parameters=$build_parameters"
+            echo "archive_path=$archive_path"
+            echo "checksum_path=$checksum_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
+          SHORT_SHA: ${{ steps.metadata.outputs.short_sha }}
+          BUILD_PARAMETERS: ${{ steps.metadata.outputs.build_parameters }}
+          ARCHIVE_PATH: ${{ steps.metadata.outputs.archive_path }}
+          CHECKSUM_PATH: ${{ steps.metadata.outputs.checksum_path }}
+        run: |
+          set -euo pipefail
+
+          tag="tdesktop-dev-$SHORT_SHA"
+          title="$SHORT_SHA"
+          notes="$RUNNER_TEMP/release-notes.md"
+          run_started_at="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              --jq '.run_started_at'
+          )"
+
+          run_started_epoch="$(date -u -d "$run_started_at" '+%s')"
+          now_epoch="$(date -u '+%s')"
+          duration_seconds="$((now_epoch - run_started_epoch))"
+          if (( duration_seconds < 0 )); then
+            duration_seconds=0
+          fi
+
+          duration_minutes="$(((duration_seconds + 59) / 60))"
+          duration_hours="$((duration_minutes / 60))"
+          duration_remainder_minutes="$((duration_minutes % 60))"
+          build_duration="${duration_hours} h ${duration_remainder_minutes} min"
+
+          {
+            printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
+            printf 'Build duration: %s\n' "$build_duration"
+          } > "$notes"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$notes" --prerelease
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$title" --notes-file "$notes" --prerelease
+          fi
+
+          gh release upload "$tag" "$ARCHIVE_PATH" "$CHECKSUM_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+
+          {
+            echo "## Published patched Telegram Desktop"
+            echo
+            echo "- commit: \`$SOURCE_SHA\`"
+            echo "- parameters: $BUILD_PARAMETERS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  no_profile_succeeded:
+    name: Fail when reliable build failed
+    needs:
+      - gate
+      - source
+      - prepare_dependencies
+      - release_ninja_p2
+    if: >-
+      ${{
+        always() &&
+        needs.gate.result == 'success' &&
+        needs.source.result == 'success' &&
+        needs.prepare_dependencies.result == 'success' &&
+        needs.release_ninja_p2.outputs.built != 'true'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Report build failure
+        run: |
+          echo "::error::Reliable Ninja profile failed."
+          exit 1

@@ -1,0 +1,155 @@
+name: Sync official upstream dev
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 00:00 Asia/Krasnoyarsk (UTC+7).
+    - cron: "0 17 * * *"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-official-upstream-dev
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Mirror official dev when changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Require upstream sync token
+        shell: bash
+        env:
+          UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$UPSTREAM_SYNC_TOKEN" ]]; then
+            echo "::error::Repository secret UPSTREAM_SYNC_TOKEN is missing."
+            echo "::error::Create a fine-grained PAT with Contents and Workflows read/write access."
+            exit 1
+          fi
+
+      - name: Checkout patch branch
+        uses: actions/checkout@v7
+        with:
+          ref: mtproto-patches
+          fetch-depth: 1
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          persist-credentials: true
+
+      - name: Fetch official dev and detect changes
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git remote add official \
+            https://github.com/telegramdesktop/tdesktop.git
+
+          git fetch --no-tags official \
+            +refs/heads/dev:refs/remotes/official/dev
+
+          official_sha="$(
+            git rev-parse refs/remotes/official/dev
+          )"
+
+          current_sha="$(
+            git ls-remote origin refs/heads/upstream-dev |
+            awk '{ print $1 }'
+          )"
+
+          echo "Official dev SHA: $official_sha"
+          echo "Current mirror:   ${current_sha:-<missing>}"
+
+          echo "official_sha=$official_sha" >> "$GITHUB_OUTPUT"
+          echo "previous_sha=$current_sha" >> "$GITHUB_OUTPUT"
+
+          if [[ "$current_sha" == "$official_sha" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+
+            {
+              echo "## Upstream dev sync"
+              echo
+              echo "- official dev: \`$official_sha\`"
+              echo "- fork upstream-dev: \`$current_sha\`"
+              echo "- changed: no"
+              echo "- validation and build: skipped"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            exit 0
+          fi
+
+          git push origin \
+            +refs/remotes/official/dev:refs/heads/upstream-dev
+
+          mirrored_sha="$(
+            git ls-remote origin refs/heads/upstream-dev |
+            awk '{ print $1 }'
+          )"
+
+          if [[ "$mirrored_sha" != "$official_sha" ]]; then
+            echo "::error::upstream-dev does not match official dev."
+            exit 1
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Upstream dev sync"
+            echo
+            echo "- previous mirror: \`${current_sha:-missing}\`"
+            echo "- official dev: \`$official_sha\`"
+            echo "- fork upstream-dev: \`$mirrored_sha\`"
+            echo "- changed: yes"
+            echo "- validation: requested"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cancel upstream-dev push workflows
+        if: steps.sync.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          sleep 10
+
+          for status in queued in_progress; do
+            mapfile -t run_ids < <(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --branch upstream-dev \
+                --event push \
+                --status "$status" \
+                --limit 100 \
+                --json databaseId \
+                --jq '.[].databaseId'
+            )
+
+            for run_id in "${run_ids[@]}"; do
+              if [[ -n "$run_id" ]]; then
+                gh run cancel "$run_id" \
+                  --repo "$GITHUB_REPOSITORY" || true
+              fi
+            done
+          done
+
+      - name: Start reviewed patch validation
+        if: steps.sync.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run \
+            check-reviewed-patches-upstream-dev.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref mtproto-patches
+
+          echo "Patch validation workflow dispatched."

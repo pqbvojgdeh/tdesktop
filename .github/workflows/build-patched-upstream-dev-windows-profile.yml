@@ -1,0 +1,976 @@
+name: Build patched upstream dev Windows profile
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact upstream-dev commit pinned by the parent workflow.
+        required: true
+        type: string
+      source_repository:
+        description: Repository to checkout for the pinned source commit.
+        required: true
+        type: string
+      cache_key:
+        description: Exact dependency cache key produced by the preparation job.
+        required: true
+        type: string
+      runner:
+        description: GitHub-hosted runner label.
+        required: true
+        type: string
+      profile:
+        description: Stable machine-readable profile identifier.
+        required: true
+        type: string
+      profile_title:
+        description: Human-readable profile description.
+        required: true
+        type: string
+      generator:
+        description: official or ninja.
+        required: true
+        type: string
+      lto_mode:
+        description: on or off.
+        required: true
+        type: string
+      parallel:
+        description: Number of parallel build processes.
+        required: true
+        type: number
+      require_vs2026:
+        description: Require Visual Studio 2026.
+        required: true
+        type: boolean
+    outputs:
+      built:
+        description: true only when a verified package was uploaded.
+        value: ${{ jobs.build.outputs.built }}
+    secrets:
+      TDESKTOP_API_ID:
+        description: Telegram API ID for the client build.
+        required: true
+      TDESKTOP_API_HASH:
+        description: Telegram API hash for the client build.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ inputs.profile_title }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    continue-on-error: true
+
+    outputs:
+      built: ${{ steps.result.outputs.built }}
+
+    env:
+      REPO_NAME: tdesktop
+      BUILD_PROFILE: ${{ inputs.profile }}
+      BUILD_PROFILE_TITLE: ${{ inputs.profile_title }}
+      BUILD_GENERATOR: ${{ inputs.generator }}
+      BUILD_LTO_MODE: ${{ inputs.lto_mode }}
+      BUILD_PARALLEL: ${{ inputs.parallel }}
+      REQUIRE_VS2026: ${{ inputs.require_vs2026 }}
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Prepare TBuild directories
+        run: |
+          if not exist %userprofile%\TBuild\Libraries mkdir %userprofile%\TBuild\Libraries
+          if exist %GITHUB_WORKSPACE%\TBuild rmdir %GITHUB_WORKSPACE%\TBuild
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      - name: Checkout patch branch
+        uses: actions/checkout@v7
+        with:
+          ref: mtproto-patches
+          fetch-depth: 1
+          path: patch-source
+
+      - name: Checkout pinned source commit
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.source_repository }}
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          submodules: recursive
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+
+      - name: Verify pinned mirror and record source revision
+        id: source
+        shell: bash
+        env:
+          PINNED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
+          mirror_sha="$(git -C "$source_dir" rev-parse HEAD)"
+          official_sha="$(
+            git ls-remote https://github.com/telegramdesktop/tdesktop.git \
+              refs/heads/dev |
+            awk '{ print $1 }'
+          )"
+
+          if [[ ! "$PINNED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Parent workflow supplied an invalid pinned SHA."
+            exit 1
+          fi
+
+          if [[ "$mirror_sha" != "$PINNED_SOURCE_SHA" ]]; then
+            echo "::error::Checked out SHA does not match the pinned cascade SHA."
+            echo "Checked out: $mirror_sha"
+            echo "Pinned:      $PINNED_SOURCE_SHA"
+            exit 1
+          fi
+
+          echo "Pinned mirror SHA: $mirror_sha"
+
+          if [[ -n "$official_sha" ]]; then
+            echo "Current official SHA: $official_sha"
+
+            if [[ "$mirror_sha" != "$official_sha" ]]; then
+              echo "::warning::Official dev advanced after the mirror was reviewed."
+              echo "::warning::Building the exact pinned upstream-dev commit for consistency."
+            fi
+          else
+            echo "::warning::Could not resolve the current official dev SHA."
+          fi
+
+          git -C "$source_dir" log -1 --format='%H%n%ci%n%s'
+
+          short_sha="${mirror_sha:0:7}"
+          echo "sha=$mirror_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_SHA=$mirror_sha" >> "$GITHUB_ENV"
+          echo "SOURCE_SHORT_SHA=$short_sha" >> "$GITHUB_ENV"
+
+      - name: Read official SDK requirement
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
+          doc="$source_dir/docs/building-win.md"
+
+          sdk="$(
+            grep "SDK version" "$doc" |
+            sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/'
+          )"
+
+          if [[ -z "$sdk" ]]; then
+            echo "::error::Could not detect Windows SDK version."
+            exit 1
+          fi
+
+          echo "SDK=$sdk" >> "$GITHUB_ENV"
+          echo "Official Windows SDK requirement: $sdk"
+
+      - name: Locate and apply reviewed patch set
+        id: patches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
+          temp="$(cygpath -u "$RUNNER_TEMP")"
+          source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
+          patch_source="$workspace/patch-source"
+          patch_root="$temp/tdesktop-patches"
+
+          archive="$patch_source/tdesktop-mtproto-fingerprint-jitter-0010-reviewed.tar.gz"
+          expected_archive_sha="da44f53fa1095777d465e31989d9daab032e419431ebd50df4ce44d3bf8b42b0"
+
+          if [[ ! -f "$archive" ]]; then
+            echo "::error::Reviewed patch archive was not found."
+            exit 1
+          fi
+
+          archive_name="$(basename "$archive")"
+          archive_sha="$(sha256sum "$archive" | awk '{ print $1 }')"
+
+          if [[ "$archive_sha" != "$expected_archive_sha" ]]; then
+            echo "::error::Reviewed archive SHA256 does not match."
+            exit 1
+          fi
+
+          mkdir -p "$patch_root"
+          tar --force-local -xzf "$archive" -C "$patch_root"
+
+          cd "$source_dir"
+
+          patches=( "$patch_root/patches/"*.diff )
+          if (( ${#patches[@]} != 7 )); then
+            echo "::error::Expected 7 reviewed patches, found ${#patches[@]}."
+            printf "  %s\n" "${patches[@]}"
+            exit 1
+          fi
+
+          for patch in "${patches[@]}"; do
+            echo "::group::Applying $(basename "$patch")"
+            git apply --check --verbose "$patch"
+            git apply --verbose "$patch"
+            echo "::endgroup::"
+          done
+
+          menu_file="$source_dir/Telegram/SourceFiles/window/window_main_menu.cpp"
+          helper_file="$source_dir/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
+          source_sha="$SOURCE_SHA"
+          source_short_sha="$SOURCE_SHORT_SHA"
+          source_commit_time_utc="$(
+            TZ=UTC git -C "$source_dir" show -s \
+              --format=%cd \
+              --date=format-local:'%d.%m.%Y %H:%M:%SUTC' \
+              HEAD
+          )"
+          source_build_time_utc="$(date -u '+%d.%m.%Y %H:%M:%SUTC')"
+
+          if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::SOURCE_SHA is not a full Git SHA."
+            exit 1
+          fi
+
+          if [[ ! "$source_short_sha" =~ ^[0-9a-f]{7}$ ]]; then
+            echo "::error::SOURCE_SHORT_SHA is not a 7-character Git SHA."
+            exit 1
+          fi
+
+          full_placeholder_count="$(
+            grep -Foc "__TDESKTOP_COMMIT_FULL__" "$menu_file" ||
+            true
+          )"
+
+          short_placeholder_count="$(
+            grep -Foc "__TDESKTOP_COMMIT_SHORT__" "$menu_file" ||
+            true
+          )"
+
+          commit_time_placeholder_count="$(
+            grep -Foc "__TDESKTOP_COMMIT_TIME_UTC__" "$helper_file" ||
+            true
+          )"
+
+          build_time_placeholder_count="$(
+            grep -Foc "__TDESKTOP_BUILD_TIME_UTC__" "$helper_file" ||
+            true
+          )"
+
+          if [[ "$full_placeholder_count" != "1" ||
+                "$short_placeholder_count" != "1" ||
+                "$commit_time_placeholder_count" != "1" ||
+                "$build_time_placeholder_count" != "1" ]]; then
+            echo "::error::Expected exactly one commit/build placeholder of each kind."
+            echo "Full placeholders:        $full_placeholder_count"
+            echo "Short placeholders:       $short_placeholder_count"
+            echo "Commit time placeholders: $commit_time_placeholder_count"
+            echo "Build time placeholders:  $build_time_placeholder_count"
+            exit 1
+          fi
+
+          sed -i \
+            -e "s|__TDESKTOP_COMMIT_FULL__|$source_sha|g" \
+            -e "s|__TDESKTOP_COMMIT_SHORT__|$source_short_sha|g" \
+            "$menu_file"
+
+          sed -i \
+            -e "s|__TDESKTOP_COMMIT_TIME_UTC__|$source_commit_time_utc|g" \
+            -e "s|__TDESKTOP_BUILD_TIME_UTC__|$source_build_time_utc|g" \
+            "$helper_file"
+
+          if grep -Fq "__TDESKTOP_" "$menu_file" "$helper_file"; then
+            echo "::error::Commit/build placeholders remain after substitution."
+            exit 1
+          fi
+
+          grep -Fq \
+            "https://github.com/telegramdesktop/tdesktop/commit/$source_sha" \
+            "$menu_file"
+
+          grep -Fq \
+            "u\"$source_short_sha\"_q" \
+            "$menu_file"
+
+          grep -Fq \
+            "Commit: $source_commit_time_utc" \
+            "$helper_file"
+
+          grep -Fq \
+            "Build: $source_build_time_utc" \
+            "$helper_file"
+
+          git diff --check
+
+          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
+          echo "archive_sha=$archive_sha" >> "$GITHUB_OUTPUT"
+          echo "patch_count=${#patches[@]}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure ATL for MSVC 14.44 on Visual Studio 2026
+        if: ${{ inputs.require_vs2026 }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installerRoot = Join-Path `
+            ${env:ProgramFiles(x86)} `
+            "Microsoft Visual Studio\Installer"
+
+          $vswhere = Join-Path $installerRoot "vswhere.exe"
+          $setup = Join-Path $installerRoot "setup.exe"
+
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe was not found: $vswhere"
+          }
+
+          if (-not (Test-Path $setup)) {
+            throw "Visual Studio setup.exe was not found: $setup"
+          }
+
+          $vsPath = (
+            & $vswhere `
+              -latest `
+              -products * `
+              -version "[18.0,19.0)" `
+              -property installationPath |
+              Select-Object -First 1
+          )
+
+          if ([string]::IsNullOrWhiteSpace($vsPath)) {
+            throw "Visual Studio 2026 installation was not found."
+          }
+
+          $atlPattern = Join-Path `
+            $vsPath `
+            "VC\Tools\MSVC\14.44.*\atlmfc\include\atlbase.h"
+
+          $atlHeader = Get-Item `
+            -Path $atlPattern `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $atlHeader) {
+            Write-Host "Installing ATL component for MSVC 14.44..."
+
+            $arguments = @(
+              "modify"
+              "--installPath"
+              "`"$vsPath`""
+              "--add"
+              "Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL"
+              "--quiet"
+              "--norestart"
+            )
+
+            $process = Start-Process `
+              -FilePath $setup `
+              -ArgumentList $arguments `
+              -Wait `
+              -PassThru
+
+            if ($process.ExitCode -notin @(0, 3010)) {
+              throw (
+                "Visual Studio ATL installation failed with exit code " +
+                $process.ExitCode
+              )
+            }
+
+            for ($attempt = 1; $attempt -le 12; $attempt++) {
+              $atlHeader = Get-Item `
+                -Path $atlPattern `
+                -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+
+              if ($atlHeader) {
+                break
+              }
+
+              Start-Sleep -Seconds 5
+            }
+          }
+
+          if (-not $atlHeader) {
+            throw "ATL for MSVC 14.44 is still missing after installation."
+          }
+
+          Write-Host "ATL header: $($atlHeader.FullName)"
+
+      - name: Initialize MSVC x64 environment
+        uses: Eden-CI/msvc-dev-cmd@master
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+          toolset: 14.44
+
+      - name: Verify compiler, SDK and ATL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "VisualStudioVersion=$env:VisualStudioVersion"
+          Write-Host "VCToolsVersion=$env:VCToolsVersion"
+          Write-Host "WindowsSDKVersion=$env:WindowsSDKVersion"
+          Write-Host "VCToolsInstallDir=$env:VCToolsInstallDir"
+
+          if (
+            $env:REQUIRE_VS2026 -eq "true" -and
+            -not $env:VisualStudioVersion.StartsWith("18.")
+          ) {
+            throw "This profile requires Visual Studio 2026."
+          }
+
+          $atlHeader = Join-Path `
+            $env:VCToolsInstallDir `
+            "atlmfc\include\atlbase.h"
+
+          if (-not (Test-Path $atlHeader)) {
+            throw "ATL header was not found: $atlHeader"
+          }
+
+          $compiler = (Get-Command "cl.exe").Source
+          $compilerInfo = (Get-Item $compiler).VersionInfo
+
+          Write-Host "Compiler=$compiler"
+          Write-Host "Compiler version=$($compilerInfo.FileVersion)"
+
+      - name: Resolve Visual Studio 2026 instance for CMake
+        if: ${{ inputs.generator == 'official' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installerRoot = Join-Path `
+            ${env:ProgramFiles(x86)} `
+            "Microsoft Visual Studio\Installer"
+
+          $vswhere = Join-Path $installerRoot "vswhere.exe"
+
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe was not found: $vswhere"
+          }
+
+          $installationPath = (
+            & $vswhere `
+              -latest `
+              -products * `
+              -version "[18.0,19.0)" `
+              -property installationPath |
+              Select-Object -First 1
+          )
+
+          $installationVersion = (
+            & $vswhere `
+              -latest `
+              -products * `
+              -version "[18.0,19.0)" `
+              -property installationVersion |
+              Select-Object -First 1
+          )
+
+          $installationPath = "$installationPath".Trim()
+          $installationVersion = "$installationVersion".Trim()
+
+          if ([string]::IsNullOrWhiteSpace($installationPath)) {
+            throw "Visual Studio 2026 installation path was not resolved."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($installationVersion)) {
+            throw "Visual Studio 2026 installation version was not resolved."
+          }
+
+          $generator = "Visual Studio 18 2026"
+          $instance = (
+            "$installationPath,version=$installationVersion"
+          )
+          $commonTools = Join-Path $installationPath "Common7\Tools"
+
+          "CMAKE_GENERATOR=$generator" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8 `
+              -Append
+
+          "CMAKE_GENERATOR_INSTANCE=$instance" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8 `
+              -Append
+
+          "VS180COMNTOOLS=$commonTools" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8 `
+              -Append
+
+          Write-Host "CMake generator: $generator"
+          Write-Host "CMake generator instance: $instance"
+          Write-Host "VS180COMNTOOLS: $commonTools"
+
+          cmake --version
+
+      - name: Free runner disk before Telegram build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          function Get-FreeGiB {
+            [math]::Round(
+              (Get-PSDrive -Name C).Free / 1GB,
+              2
+            )
+          }
+
+          $before = Get-FreeGiB
+          Write-Host "Free disk before cleanup: $before GiB"
+
+          $servicePattern = (
+            "SQL|Postgre|MySQL|Mongo|Cosmos"
+          )
+
+          Get-Service |
+            Where-Object {
+              $_.Status -ne "Stopped" -and
+              (
+                $_.Name -match $servicePattern -or
+                $_.DisplayName -match $servicePattern
+              )
+            } |
+            Stop-Service -Force -ErrorAction SilentlyContinue
+
+          $removePaths = @(
+            "C:\Android",
+            "C:\Program Files (x86)\Android",
+            "C:\hostedtoolcache\windows\CodeQL",
+            "C:\Program Files\dotnet\sdk",
+            "C:\Program Files\Microsoft SQL Server",
+            "C:\Program Files (x86)\Microsoft SQL Server",
+            "C:\Program Files\PostgreSQL",
+            "C:\Program Files\MySQL",
+            "C:\Program Files\MongoDB",
+            "C:\Program Files\Azure Cosmos DB Emulator",
+            "C:\ProgramData\Microsoft\VisualStudio\Packages",
+            "C:\ProgramData\Package Cache"
+          )
+
+          foreach ($path in $removePaths) {
+            if (Test-Path $path) {
+              Write-Host "Removing $path"
+              & cmd.exe /d /c "rd /s /q `"$path`""
+            }
+          }
+
+          $tempPaths = @(
+            "$env:TEMP\*",
+            "$env:LOCALAPPDATA\Temp\*",
+            "$env:USERPROFILE\.nuget\packages\*",
+            "C:\Windows\Temp\*"
+          )
+
+          foreach ($path in $tempPaths) {
+            Remove-Item `
+              $path `
+              -Recurse `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          Clear-RecycleBin `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          $after = Get-FreeGiB
+          $freed = [math]::Round($after - $before, 2)
+
+          Write-Host "Free disk after cleanup: $after GiB"
+          Write-Host "Freed by cleanup: $freed GiB"
+
+          if ($after -lt 18) {
+            Write-Warning (
+              "Less than 18 GiB is free before dependency build. " +
+              "The profile may still fall back automatically."
+            )
+          }
+
+          $ErrorActionPreference = "Stop"
+
+      - name: Configure NuGet sources
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      - name: Restore prepared ThirdParty cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-vs2026-upstream-dev-third-party-${{ inputs.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Restore prepared Release libraries cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-vs2026-upstream-dev-release-libs-${{ inputs.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Restore prepared Release Qt 6 cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-${{ inputs.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Prune dependency sources before Telegram build
+        shell: bash
+        run: |
+          find "$LibrariesPath" \
+            '(' \
+              '(' \
+                ! '(' \
+                  -name '*.lib' -o \
+                  -name '*.a' -o \
+                  -name '*.exe' -o \
+                  -name '*.h' -o \
+                  -name '*.hpp' -o \
+                  -name '*.inc' -o \
+                  -name '*.cmake' -o \
+                  -path '*/include/*' -o \
+                  -path '*/objects-*' -o \
+                  -path '*/cache_keys/*' -o \
+                  -path '*/patches/*' \
+                ')' \
+                -type f \
+              ')' \
+              -o -empty \
+            ')' -delete
+
+      - name: Verify Telegram API secrets
+        shell: pwsh
+        run: |
+          if ($env:TDESKTOP_API_ID -notmatch '^[0-9]+$') {
+            Write-Error 'TDESKTOP_API_ID repository secret is missing or invalid.'
+            exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_HASH)) {
+            Write-Error 'TDESKTOP_API_HASH repository secret is missing.'
+            exit 1
+          }
+
+      - name: Configure and build selected profile
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ inputs.parallel }}
+        run: |
+          cd %TBUILD%\%REPO_NAME%\Telegram
+
+          set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF"
+          if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2"
+
+          if /I "%BUILD_GENERATOR%"=="official" (
+            set "CMAKE_GENERATOR=Visual Studio 18 2026"
+            call configure.bat ^
+              x64 ^
+              qt6 ^
+              -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+              -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
+              -D CMAKE_CONFIGURATION_TYPES=Release ^
+              -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+              -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+              -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
+              -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
+              %LTO_FLAGS%
+          ) else (
+            call configure.bat ^
+              -G "Ninja Multi-Config" ^
+              qt6 ^
+              -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+              -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
+              -D CMAKE_CONFIGURATION_TYPES=Release ^
+              -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+              -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+              -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
+              -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
+              %LTO_FLAGS%
+          )
+
+          if errorlevel 1 exit /b 1
+
+          cmake --build ..\out ^
+            --config Release ^
+            --target Telegram ^
+            --parallel %BUILD_PARALLEL%
+
+      - name: Collect executable and build metadata
+        shell: pwsh
+        env:
+          PATCH_ARCHIVE_NAME: ${{ steps.patches.outputs.archive_name }}
+          PATCH_ARCHIVE_SHA: ${{ steps.patches.outputs.archive_sha }}
+          PATCH_COUNT: ${{ steps.patches.outputs.patch_count }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $out = Join-Path `
+            $env:TBUILD `
+            "$env:REPO_NAME\out\Release"
+
+          $artifact = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "artifact-release"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $artifact |
+            Out-Null
+
+          $files = Get-ChildItem -Path $out -File |
+            Where-Object { $_.Extension -in @(".exe", ".dll") }
+
+          $telegram = $files |
+            Where-Object { $_.Name -eq "Telegram.exe" }
+
+          if (-not $telegram) {
+            throw "Telegram.exe was not found in $out"
+          }
+
+          $files |
+            Copy-Item `
+              -Destination $artifact `
+              -Force
+
+          $generatorDescription = if ($env:BUILD_GENERATOR -eq "official") {
+            "Visual Studio 18 2026 / MSBuild"
+          }
+          else {
+            "Ninja Multi-Config"
+          }
+
+          $ltoDescription = if ($env:BUILD_LTO_MODE -eq "on") {
+            "enabled"
+          }
+          else {
+            "disabled"
+          }
+
+          @"
+          Source repository: ${{ inputs.source_repository }}
+          Source branch: dev
+          Source commit: $env:SOURCE_SHA
+          Mirror branch: upstream-dev
+          Patch branch: mtproto-patches
+          Patch archive: $env:PATCH_ARCHIVE_NAME
+          Patch archive SHA256: $env:PATCH_ARCHIVE_SHA
+          Applied patch count: $env:PATCH_COUNT
+          Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+          Build profile: $env:BUILD_PROFILE
+          Profile details: $env:BUILD_PROFILE_TITLE
+          Configuration: Release
+          Generator: $generatorDescription
+          Architecture: Windows x64
+          LTO: $ltoDescription
+          Parallel build processes: $env:BUILD_PARALLEL
+          Auto-update: disabled
+          Crash reports: disabled
+          "@ |
+            Set-Content `
+              -Path (Join-Path $artifact "BUILD_INFO.txt") `
+              -Encoding ascii
+
+          Get-ChildItem -Path $artifact -File |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object {
+              "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))"
+            } |
+            Set-Content `
+              -Path (Join-Path $artifact "SHA256SUMS.txt") `
+              -Encoding ascii
+
+      - name: Create maximum-compression 7z package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $artifactDir = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "artifact-release"
+
+          $packageDir = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "package-output"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $packageDir |
+            Out-Null
+
+          $archiveName = "tdesktop ($env:SOURCE_SHORT_SHA).7z"
+          $checksumName = "$archiveName.sha256"
+          $archivePath = Join-Path $packageDir $archiveName
+          $checksumPath = Join-Path $packageDir $checksumName
+          $metadataPath = Join-Path $packageDir "release-metadata.json"
+
+          $sevenZipCommand = Get-Command `
+            "7z.exe" `
+            -ErrorAction SilentlyContinue
+
+          if ($sevenZipCommand) {
+            $sevenZip = $sevenZipCommand.Source
+          }
+          else {
+            $sevenZip = Join-Path `
+              $env:ProgramFiles `
+              "7-Zip\7z.exe"
+          }
+
+          if (-not (Test-Path $sevenZip)) {
+            throw "7-Zip executable was not found: $sevenZip"
+          }
+
+          Push-Location $artifactDir
+
+          try {
+            & $sevenZip a `
+              "-t7z" `
+              "-mx=9" `
+              "-m0=lzma2" `
+              "-ms=on" `
+              "-mmt=on" `
+              $archivePath `
+              ".\*"
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "7-Zip compression failed: exit code $LASTEXITCODE"
+            }
+          }
+          finally {
+            Pop-Location
+          }
+
+          & $sevenZip t $archivePath
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "7-Zip verification failed: exit code $LASTEXITCODE"
+          }
+
+          $archiveHash = (
+            Get-FileHash `
+              $archivePath `
+              -Algorithm SHA256
+          ).Hash.ToLower()
+
+          "$archiveHash  $archiveName" |
+            Set-Content `
+              -Path $checksumPath `
+              -Encoding ascii
+
+          $generatorName = if ($env:BUILD_GENERATOR -eq "official") {
+            "Visual Studio 18 2026 / MSBuild"
+          }
+          else {
+            "Ninja Multi-Config"
+          }
+
+          $ltoValue = if ($env:BUILD_LTO_MODE -eq "on") {
+            "ON"
+          }
+          else {
+            "OFF"
+          }
+
+          $buildParameters = (
+            "Windows x64 · MSVC 14.44 · Qt 6 · " +
+            "$generatorName · IPO/LTO=$ltoValue"
+          )
+
+          [ordered]@{
+            source_sha = $env:SOURCE_SHA
+            short_sha = $env:SOURCE_SHORT_SHA
+            profile = $env:BUILD_PROFILE
+            profile_title = $env:BUILD_PROFILE_TITLE
+            build_parameters = $buildParameters
+            workflow_run_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            archive_name = $archiveName
+            checksum_name = $checksumName
+          } |
+            ConvertTo-Json |
+            Set-Content `
+              -Path $metadataPath `
+              -Encoding utf8
+
+          Get-Item `
+            $archivePath, `
+            $checksumPath, `
+            $metadataPath |
+            Select-Object Name, Length |
+            Format-Table -AutoSize
+
+      - name: Upload successful Windows package
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-dev-${{ steps.source.outputs.short_sha }}-Windows-x64-${{ inputs.profile }}
+          path: package-output\
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Export profile result
+        id: result
+        if: always()
+        shell: pwsh
+        env:
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $built = ($env:UPLOAD_OUTCOME -eq "success")
+          $builtText = $built.ToString().ToLowerInvariant()
+
+          "built=$builtText" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
+
+          if ($built) {
+            $summary = @(
+              "## Build profile succeeded"
+              ""
+              "- profile: $env:BUILD_PROFILE"
+              "- details: $env:BUILD_PROFILE_TITLE"
+              "- source: $env:SOURCE_SHA"
+              "- Actions artifact: uploaded for 14 days"
+            )
+          }
+          else {
+            $summary = @(
+              "## Build profile did not produce a package"
+              ""
+              "- profile: $env:BUILD_PROFILE"
+              "- details: $env:BUILD_PROFILE_TITLE"
+              "- next fallback: requested automatically"
+            )
+          }
+
+          $summary |
+            Out-File `
+              -FilePath $env:GITHUB_STEP_SUMMARY `
+              -Encoding utf8 `
+              -Append
