@@ -1,5 +1,5 @@
 diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
-index b52dc8de9..3497e1b26 100644
+index b52dc8d..5a7f2b0 100644
 --- a/Telegram/Resources/langs/lang.strings
 +++ b/Telegram/Resources/langs/lang.strings
 @@ -1267,6 +1267,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -22,7 +22,7 @@ index b52dc8de9..3497e1b26 100644
  "lng_proxy_auto_switch_about" = "You can choose how quickly the app should auto-connect to the nearest active proxy if the current one stops working.";
  "lng_proxy_auto_switch_timeout#one" = "{count} s";
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da..7857a4b51 100644
+index 6d99e31..17a6355 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -33,17 +33,79 @@ index 6d99e31da..7857a4b51 100644
  #include "ui/wrap/slide_wrap.h"
  #include "ui/wrap/table_layout.h"
  #include "ui/wrap/vertical_layout.h"
-@@ -626,16 +627,23 @@ private:
+@@ -59,6 +60,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "styles/style_menu_icons.h"
+ #include "styles/style_settings.h"
+ 
++#include <QtCore/QTimer>
+ #include <QtGui/QGuiApplication>
+ #include <QtGui/QClipboard>
+ #include <QtWidgets/QTextEdit>
+@@ -69,6 +71,50 @@ constexpr auto kSaveSettingsDelayedTimeout = crl::time(1000);
+ 
+ using ProxyData = MTP::ProxyData;
+ 
++[[nodiscard]] QString ClientHelloName(ProxyData::CHelloType type) {
++	switch (type) {
++	case ProxyData::CHelloType::Chrome:
++		return u"Chrome"_q;
++	case ProxyData::CHelloType::Custom:
++		return u"Firefox (permuted ext)"_q;
++	case ProxyData::CHelloType::SafariMac:
++		return u"Safari (macOS)"_q;
++	case ProxyData::CHelloType::YandexGost:
++		return u"Yandex (GOST)"_q;
++	case ProxyData::CHelloType::Chromium149:
++		return u"Chromium 149"_q;
++	case ProxyData::CHelloType::RANDOM:
++		return u"Random"_q;
++	case ProxyData::CHelloType::Firefox:
++	default:
++		return u"FireFox"_q;
++	}
++}
++
++[[nodiscard]] QString ClientHelloStatusText() {
++	const auto status = ProxyData::globalCHelloStatus();
++	if (!status.used) {
++		return u"Last ClientHello: not used yet"_q;
++	}
++	auto result = u"Last ClientHello: "_q;
++	if (status.random) {
++		result += u"Random -> "_q;
++	}
++	result += ClientHelloName(status.actual);
++	if (status.chromium149) {
++		result += status.resumed ? u" resumed"_q : u" fresh"_q;
++		if (status.ttlMinutes > 0) {
++			result += status.resumed
++				? u", TTL left ~%1 min"_q.arg(status.ttlLeftMinutes)
++				: u", resumed window %1 min"_q.arg(status.ttlMinutes);
++		}
++	}
++	if (!status.endpoint.isEmpty()) {
++		result += u" ("_q + status.endpoint + u")"_q;
++	}
++	return result;
++}
++
+ [[nodiscard]] int ClosestProxyRotationTimeoutSection(int value) {
+ 	auto result = 0;
+ 	auto bestDistance = 0;
+@@ -626,16 +672,26 @@ private:
  	int rowHeight() const;
  	void refreshProxyForCalls();
  	void refreshProxyRotation();
 +	void refreshProxySlowMode();
++	void refreshProxyCHelloStatus();
  
  	not_null<ProxiesBoxController*> _controller;
  	Core::SettingsProxy &_settings;
  	QPointer<Ui::Checkbox> _tryIPv6;
  	std::shared_ptr<Ui::RadioenumGroup<ProxyData::Settings>> _proxySettings;
 +	std::shared_ptr<Ui::RadioenumGroup<ProxyData::CHelloType>> _proxyCHelloSettings;
++	QPointer<Ui::FlatLabel> _proxyCHelloStatus;
++	QPointer<QTimer> _proxyCHelloStatusTimer;
  	QPointer<Ui::SlideWrap<Ui::Checkbox>> _proxyForCalls;
  	QPointer<Ui::SlideWrap<Ui::Checkbox>> _proxyRotation;
  	QPointer<Ui::SlideWrap<Ui::VerticalLayout>> _proxyRotationOptions;
@@ -57,7 +119,7 @@ index 6d99e31da..7857a4b51 100644
  	base::unique_qptr<Ui::RpWidget> _noRows;
  	object_ptr<Ui::VerticalLayout> _initialWrap;
  	QPointer<Ui::VerticalLayout> _wrap;
-@@ -1137,6 +1145,116 @@ void ProxiesBox::setupContent() {
+@@ -1137,6 +1193,133 @@ void ProxiesBox::setupContent() {
  			ProxyData::Settings::Enabled,
  			tr::lng_proxy_use_custom(tr::now)),
  		st::proxyUsePadding);
@@ -122,6 +184,23 @@ index 6d99e31da..7857a4b51 100644
 +			ProxyData::CHelloType::RANDOM,
 +			tr::lng_proxy_chello_random(tr::now)),
 +		st::proxyUsePadding);
++	_proxyCHelloStatus = inner->add(
++		object_ptr<Ui::FlatLabel>(
++			inner,
++			ClientHelloStatusText(),
++			st::boxDividerLabel),
++		style::margins(
++			st::proxyUsePadding.left(),
++			0,
++			st::proxyUsePadding.right(),
++			st::proxyRowPadding.top()));
++	refreshProxyCHelloStatus();
++	_proxyCHelloStatusTimer = new QTimer(this);
++	_proxyCHelloStatusTimer->setInterval(1000);
++	connect(_proxyCHelloStatusTimer, &QTimer::timeout, [=] {
++		refreshProxyCHelloStatus();
++	});
++	_proxyCHelloStatusTimer->start();
 +	// -- ClientHello customization
 +	// ++ proxy slow connect controls
 +	_proxySlowMode = inner->add(
@@ -174,7 +253,7 @@ index 6d99e31da..7857a4b51 100644
  	_proxyForCalls = inner->add(
  		object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
  			inner,
-@@ -1219,6 +1330,33 @@ void ProxiesBox::setupContent() {
+@@ -1219,6 +1402,33 @@ void ProxiesBox::setupContent() {
  		refreshProxyForCalls();
  		refreshProxyRotation();
  	});
@@ -208,7 +287,7 @@ index 6d99e31da..7857a4b51 100644
  	_tryIPv6->checkedChanges(
  	) | rpl::on_next([=](bool checked) {
  		_controller->setTryIPv6(checked);
-@@ -1253,6 +1391,7 @@ void ProxiesBox::setupContent() {
+@@ -1253,6 +1463,7 @@ void ProxiesBox::setupContent() {
  	refreshProxyRotation();
  	_proxyForCalls->finishAnimating();
  	_proxyRotation->finishAnimating();
@@ -216,7 +295,7 @@ index 6d99e31da..7857a4b51 100644
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1312,6 +1451,14 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1312,6 +1523,20 @@ void ProxiesBox::refreshProxyRotation() {
  		anim::type::normal);
  }
  
@@ -228,10 +307,16 @@ index 6d99e31da..7857a4b51 100644
 +	// _proxySlowModeOptions->setVisible(_proxySlowMode->checked());
 +}
 +
++void ProxiesBox::refreshProxyCHelloStatus() {
++	if (_proxyCHelloStatus) {
++		_proxyCHelloStatus->setText(ClientHelloStatusText());
++	}
++}
++
  int ProxiesBox::rowHeight() const {
  	return st::proxyRowPadding.top()
  		+ st::semiboldFont->height
-@@ -2301,6 +2448,52 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+@@ -2301,6 +2526,52 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  	return true;
  }
  
@@ -285,7 +370,7 @@ index 6d99e31da..7857a4b51 100644
  	if (_settings.useProxyForCalls() == enabled) {
  		return;
 diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
-index 5de98bc66..87bd5f38e 100644
+index 5de98bc..87bd5f3 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
 @@ -84,6 +84,10 @@ public:
@@ -300,7 +385,7 @@ index 5de98bc66..87bd5f38e 100644
  	void setProxyRotationEnabled(bool enabled);
  	void setProxyRotationTimeout(int value);
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b84..b04434e43 100644
+index 495bb0b..5bedac9 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
 @@ -13,6 +13,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -337,7 +422,7 @@ index 495bb0b84..b04434e43 100644
  namespace {
  
  [[nodiscard]] qint32 ProxySettingsToInt(MTP::ProxyData::Settings settings) {
-@@ -145,6 +170,12 @@ QByteArray SettingsProxy::serialize() const {
+@@ -145,6 +172,12 @@ QByteArray SettingsProxy::serialize() const {
  	for (const auto index : _proxyRotationPreferredIndices) {
  		stream << qint32(index);
  	}
@@ -350,7 +435,7 @@ index 495bb0b84..b04434e43 100644
  	return std::move(stream).result();
  }
  
-@@ -210,6 +241,22 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -210,6 +243,22 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  			}
  		}
  	}
@@ -373,7 +458,7 @@ index 495bb0b84..b04434e43 100644
  
  	if (!stream.ok()) {
  		LOG(("App Error: "
-@@ -226,7 +273,16 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -226,7 +275,16 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  	_selected = DeserializeProxyData(selectedProxy);
  	_list = std::move(list);
  	setProxyRotationPreferredIndices(std::move(preferredIndices));
@@ -391,7 +476,7 @@ index 495bb0b84..b04434e43 100644
  	return true;
  }
  
-@@ -310,6 +366,38 @@ void SettingsProxy::setProxyRotationTimeout(int value) {
+@@ -310,6 +368,38 @@ void SettingsProxy::setProxyRotationTimeout(int value) {
  		: kDefaultProxyRotationTimeout;
  }
  
@@ -431,7 +516,7 @@ index 495bb0b84..b04434e43 100644
  	return _settings;
  }
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.h b/Telegram/SourceFiles/core/core_settings_proxy.h
-index 1f2ec5c51..f165ef39d 100644
+index 1f2ec5c..f165ef3 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.h
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.h
 @@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -475,24 +560,11 @@ index 1f2ec5c51..f165ef39d 100644
  	MTP::ProxyData _selected;
  	std::vector<MTP::ProxyData> _list;
  	std::vector<int> _proxyRotationPreferredIndices;
-diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index 287bd30de..5cef7eb54 100644
---- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-+++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-@@ -80,6 +80,8 @@ private:
- 
- 	const bytes::vector _secret;
- 	QTcpSocket _socket;
-+	QString _address;
-+	int _port = 0;
- 	State _state = State::NotConnected;
- 	QByteArray _incoming;
- 	int _incomingGoodDataOffset = 0;
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index a3c962885..177f2305f 100644
+index a3c9628..7f0641a 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -8,13 +8,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -8,20 +8,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "mtproto/details/mtproto_tls_socket.h"
  
  #include "mtproto/details/mtproto_tcp_socket.h"
@@ -514,7 +586,7 @@ index a3c962885..177f2305f 100644
  #include <range/v3/algorithm/reverse.hpp>
  
  namespace MTP::details {
-@@ -29,6 +37,6 @@ namespace {
+ namespace {
  
  constexpr auto kMaxGrease = 8;
 -constexpr auto kClientHelloLimit = 2048;
@@ -531,7 +603,7 @@ index a3c962885..177f2305f 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -230,6 +238,880 @@ using BigNumContext = openssl::Context;
+@@ -230,6 +238,910 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -1368,23 +1440,43 @@ index a3c962885..177f2305f 100644
 +		std::chrono::minutes ttl;
 +	};
 +	static auto chromium149SeenByEndpoint = std::map<std::pair<QString, int>, Chromium149EndpointState>();
-+	auto ch_type = MTP::ProxyData::globalClienHelloRulesType();
-+	if(ProxyData::CHelloType::RANDOM == ch_type) {
++	const auto configured_ch_type = MTP::ProxyData::globalClienHelloRulesType();
++	auto ch_type = configured_ch_type;
++	if (ProxyData::CHelloType::RANDOM == ch_type) {
 +		// qDebug("--- randomize ClientHello selection");
 +		ch_type = Core::IntToProxyCHelloType(QRandomGenerator::global()->bounded(0, 6));
 +	}
++	const auto saveStatus = [&](ProxyData::CHelloType actual_ch_type, bool resumed = false, int ttlMinutes = 0, int ttlLeftMinutes = 0) {
++		auto status = MTP::ProxyData::CHelloStatus();
++		status.configured = configured_ch_type;
++		status.actual = actual_ch_type;
++		status.endpoint = QString("%1:%2").arg(address).arg(port);
++		status.random = (configured_ch_type == ProxyData::CHelloType::RANDOM);
++		status.chromium149 = (actual_ch_type == ProxyData::CHelloType::Chromium149);
++		status.resumed = resumed;
++		status.ttlMinutes = ttlMinutes;
++		status.ttlLeftMinutes = ttlLeftMinutes;
++		status.used = true;
++		MTP::ProxyData::setGlobalCHelloStatus(status);
++	};
 +	switch(ch_type) {
 +		case ProxyData::CHelloType::Chrome:
 +			// qDebug(">>> using Chrome ClientHello");
++			saveStatus(ch_type);
 +			return chRules_chrome;
 +		case ProxyData::CHelloType::Custom:
 +			// qDebug(">>> using custom ClientHello");
++			saveStatus(ch_type);
 +			return chRules_custom;
 +		case ProxyData::CHelloType::SafariMac:
++			saveStatus(ch_type);
 +			return chRules_safari;
 +		case ProxyData::CHelloType::YandexGost:
++			saveStatus(ch_type);
 +			return chRules_yandex;
 +		case ProxyData::CHelloType::Chromium149: {
++			int ttlMinutes = 0;
++			int ttlLeftMinutes = 0;
 +			const auto resumed = [&] {
 +				namespace sc = std::chrono;
 +				const QMutexLocker lock(&chromium149Mutex);
@@ -1394,10 +1486,19 @@ index a3c962885..177f2305f 100644
 +					&& now - state.seenAt < state.ttl;
 +				if (!result) {
 +					state.ttl = sc::minutes(30 + QRandomGenerator::global()->bounded(31));
++					state.seenAt = now;
 +				}
-+				state.seenAt = now;
++				ttlMinutes = int(state.ttl.count());
++				const auto elapsed = result
++					? int(sc::duration_cast<sc::minutes>(now - state.seenAt).count())
++					: 0;
++				ttlLeftMinutes = ttlMinutes - elapsed;
++				if (ttlLeftMinutes < 0) {
++					ttlLeftMinutes = 0;
++				}
 +				return result;
 +			}();
++			saveStatus(ch_type, resumed, ttlMinutes, ttlLeftMinutes);
 +			return resumed
 +				? chRules_chromium149Resumed
 +				: chRules_chromium149Fresh;
@@ -1405,6 +1506,7 @@ index a3c962885..177f2305f 100644
 +		case ProxyData::CHelloType::Firefox:
 +		default:
 +			// qDebug(">>> using FireFox ClientHello");
++			saveStatus(ProxyData::CHelloType::Firefox);
 +			return chRules_firefox;
 +	}
 +}
@@ -1412,7 +1514,7 @@ index a3c962885..177f2305f 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -652,7 +1306,7 @@ void TlsSocket::plainConnected() {
+@@ -652,7 +1564,7 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -1421,7 +1523,7 @@ index a3c962885..177f2305f 100644
  	const auto hello = PrepareClientHello(
  		kClientHelloRules,
  		domainFromSecret(),
-@@ -838,6 +1492,47 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -838,6 +1750,47 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -1469,15 +1571,44 @@ index a3c962885..177f2305f 100644
  	_socket.connectToHost(address, port);
  }
  
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
+index c97b1d7..f7c23d7 100644
+--- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
+@@ -57,6 +57,8 @@ private:
+ 
+ 	const bytes::vector _secret;
+ 	QTcpSocket _socket;
++	QString _address;
++	int _port = 0;
+ 	State _state = State::NotConnected;
+ 	QByteArray _incoming;
+ 	int _incomingGoodDataOffset = 0;
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c5402..fdae22ea9 100644
+index f1f2c54..a01d8fd 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-@@ -245,4 +245,41 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
+@@ -10,9 +10,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "base/qthelp_url.h"
+ #include "base/qt/qt_string_view.h"
+ 
++#include <QtCore/QMutex>
++#include <QtCore/QMutexLocker>
++
+ namespace MTP {
+ namespace {
+ 
++QMutex CHelloStatusMutex;
++
+ [[nodiscard]] bool IsHexMtprotoPassword(const QString &password) {
+ 	const auto size = password.size();
+ 	if (size < 32 || size % 2 == 1) {
+@@ -245,4 +250,52 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
  		proxy.password);
  }
  
 +ProxyData::CHelloType ProxyData::global_ch_type = ProxyData::CHelloType::Firefox;
++ProxyData::CHelloStatus ProxyData::global_ch_status;
 +bool ProxyData::global_slow_mode   = false;
 +int  ProxyData::global_slow_delay  = 250;
 +int  ProxyData::global_slow_jitter = 150;
@@ -1488,6 +1619,16 @@ index f1f2c5402..fdae22ea9 100644
 +
 +ProxyData::CHelloType ProxyData::globalClienHelloRulesType() {
 +	return global_ch_type;
++}
++
++void ProxyData::setGlobalCHelloStatus(const ProxyData::CHelloStatus &status) {
++	const QMutexLocker lock(&CHelloStatusMutex);
++	global_ch_status = status;
++}
++
++ProxyData::CHelloStatus ProxyData::globalCHelloStatus() {
++	const QMutexLocker lock(&CHelloStatusMutex);
++	return global_ch_status;
 +}
 +
 +void ProxyData::setGlobalSlowMode(bool value) {
@@ -1516,10 +1657,10 @@ index f1f2c5402..fdae22ea9 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f52..7dd4b5235 100644
+index 367ee3f..7ddc775 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-@@ -29,6 +29,16 @@ struct ProxyData {
+@@ -29,6 +29,27 @@ struct ProxyData {
  		IncorrectSecret,
  		Invalid,
  	};
@@ -1533,15 +1674,29 @@ index 367ee3f52..7dd4b5235 100644
 +		Chromium149, // Ungoogled Chromium 149-like, based on tls.peet.ws captures
 +		RANDOM
 +	};
++	struct CHelloStatus {
++		CHelloType configured = CHelloType::Firefox;
++		CHelloType actual = CHelloType::Firefox;
++		QString endpoint;
++		bool random = false;
++		bool chromium149 = false;
++		bool resumed = false;
++		int ttlMinutes = 0;
++		int ttlLeftMinutes = 0;
++		bool used = false;
++	};
  
  	Type type = Type::None;
  	QString host;
-@@ -51,6 +60,23 @@ struct ProxyData {
+@@ -51,6 +72,27 @@ struct ProxyData {
  	[[nodiscard]] static Status MtprotoPasswordStatus(
  		const QString &password);
  
 +	static void setGlobalClienHelloRulesType(const ProxyData::CHelloType ch_type);
 +	[[nodiscard]] static ProxyData::CHelloType globalClienHelloRulesType();
++
++	static void setGlobalCHelloStatus(const ProxyData::CHelloStatus &status);
++	[[nodiscard]] static ProxyData::CHelloStatus globalCHelloStatus();
 +
 +	static void setGlobalSlowMode(bool value);
 +	[[nodiscard]] static bool globalSlowMode();
@@ -1554,6 +1709,7 @@ index 367ee3f52..7dd4b5235 100644
 +
 +private:
 +	static ProxyData::CHelloType global_ch_type;
++	static ProxyData::CHelloStatus global_ch_status;
 +	static bool global_slow_mode;
 +	static int global_slow_delay;
 +	static int global_slow_jitter;
