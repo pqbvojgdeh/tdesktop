@@ -185,38 +185,22 @@ jobs:
           set -euo pipefail
 
           workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
-          temp="$(cygpath -u "$RUNNER_TEMP")"
           source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
-          patch_source="$workspace/patch-source"
-          patch_root="$temp/tdesktop-patches"
-
-          archive="$patch_source/tdesktop-mtproto-fingerprint-jitter-0010-reviewed.tar.gz"
-          expected_archive_sha="da44f53fa1095777d465e31989d9daab032e419431ebd50df4ce44d3bf8b42b0"
-
-          if [[ ! -f "$archive" ]]; then
-            echo "::error::Reviewed patch archive was not found."
-            exit 1
-          fi
-
-          archive_name="$(basename "$archive")"
-          archive_sha="$(sha256sum "$archive" | awk '{ print $1 }')"
-
-          if [[ "$archive_sha" != "$expected_archive_sha" ]]; then
-            echo "::error::Reviewed archive SHA256 does not match."
-            exit 1
-          fi
-
-          mkdir -p "$patch_root"
-          tar --force-local -xzf "$archive" -C "$patch_root"
+          patch_source="$workspace/patch-source/patches"
 
           cd "$source_dir"
 
-          patches=( "$patch_root/patches/"*.diff )
-          if (( ${#patches[@]} != 7 )); then
-            echo "::error::Expected 7 reviewed patches, found ${#patches[@]}."
-            printf "  %s\n" "${patches[@]}"
-            exit 1
-          fi
+          patches=(
+            "$patch_source/0001-proxy-mtproto-client-hello-delay.diff"
+            "$patch_source/0002-main-menu-version-commit-build-tooltip.diff"
+          )
+
+          for patch in "${patches[@]}"; do
+            if [[ ! -f "$patch" ]]; then
+              echo "::error::Reviewed patch file was not found: $patch"
+              exit 1
+            fi
+          done
 
           for patch in "${patches[@]}"; do
             echo "::group::Applying $(basename "$patch")"
@@ -232,10 +216,9 @@ jobs:
           source_commit_time_utc="$(
             TZ=UTC git -C "$source_dir" show -s \
               --format=%cd \
-              --date=format-local:'%d.%m.%Y %H:%M:%SUTC' \
+              --date=format-local:'%Y-%m-%d %H:%M:%S UTC' \
               HEAD
           )"
-          source_build_time_utc="$(date -u '+%d.%m.%Y %H:%M:%SUTC')"
 
           if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::SOURCE_SHA is not a full Git SHA."
@@ -286,11 +269,10 @@ jobs:
 
           sed -i \
             -e "s|__TDESKTOP_COMMIT_TIME_UTC__|$source_commit_time_utc|g" \
-            -e "s|__TDESKTOP_BUILD_TIME_UTC__|$source_build_time_utc|g" \
             "$helper_file"
 
-          if grep -Fq "__TDESKTOP_" "$menu_file" "$helper_file"; then
-            echo "::error::Commit/build placeholders remain after substitution."
+          if grep -Fq "__TDESKTOP_COMMIT_" "$menu_file" "$helper_file"; then
+            echo "::error::Commit placeholders remain after substitution."
             exit 1
           fi
 
@@ -306,16 +288,14 @@ jobs:
             "Commit: $source_commit_time_utc" \
             "$helper_file"
 
-          grep -Fq \
-            "Build: $source_build_time_utc" \
-            "$helper_file"
-
           git diff --check
 
-          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
-          echo "archive_sha=$archive_sha" >> "$GITHUB_OUTPUT"
           echo "patch_count=${#patches[@]}" >> "$GITHUB_OUTPUT"
-
+          printf 'patch_names<<EOF\n' >> "$GITHUB_OUTPUT"
+          for patch in "${patches[@]}"; do
+            basename "$patch" >> "$GITHUB_OUTPUT"
+          done
+          printf 'EOF\n' >> "$GITHUB_OUTPUT"
       - name: Ensure ATL for MSVC 14.44 on Visual Studio 2026
         if: ${{ inputs.require_vs2026 }}
         shell: pwsh
@@ -711,6 +691,9 @@ jobs:
 
           if errorlevel 1 exit /b 1
 
+          for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC', [Globalization.CultureInfo]::InvariantCulture)"`) do set "SOURCE_BUILD_TIME_UTC=%%i"
+          powershell -NoProfile -Command "$p = Join-Path $env:TBUILD '%REPO_NAME%\Telegram\SourceFiles\window\window_main_menu_helpers.cpp'; $text = [IO.File]::ReadAllText($p); if (-not $text.Contains('__TDESKTOP_BUILD_TIME_UTC__')) { throw 'Build time placeholder was not found.' }; $text = $text.Replace('__TDESKTOP_BUILD_TIME_UTC__', $env:SOURCE_BUILD_TIME_UTC); $encoding = New-Object System.Text.UTF8Encoding $false; [IO.File]::WriteAllText($p, $text, $encoding)"
+
           cmake --build ..\out ^
             --config Release ^
             --target Telegram ^
@@ -719,8 +702,6 @@ jobs:
       - name: Collect executable and build metadata
         shell: pwsh
         env:
-          PATCH_ARCHIVE_NAME: ${{ steps.patches.outputs.archive_name }}
-          PATCH_ARCHIVE_SHA: ${{ steps.patches.outputs.archive_sha }}
           PATCH_COUNT: ${{ steps.patches.outputs.patch_count }}
         run: |
           $ErrorActionPreference = "Stop"
@@ -774,8 +755,6 @@ jobs:
           Source commit: $env:SOURCE_SHA
           Mirror branch: upstream-dev
           Patch branch: mtproto-patches
-          Patch archive: $env:PATCH_ARCHIVE_NAME
-          Patch archive SHA256: $env:PATCH_ARCHIVE_SHA
           Applied patch count: $env:PATCH_COUNT
           Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
           Build profile: $env:BUILD_PROFILE

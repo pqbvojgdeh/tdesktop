@@ -33,36 +33,14 @@ jobs:
           fetch-depth: 1
           path: source
 
-      - name: Verify mirror, archive and patch application
-        id: verify
+      - name: Verify mirror and patch application
+        id: validate
         shell: bash
         run: |
           set -euo pipefail
 
-          expected_archive_sha="da44f53fa1095777d465e31989d9daab032e419431ebd50df4ce44d3bf8b42b0"
-
-          patch_source="$GITHUB_WORKSPACE/patch-source"
+          patch_source="$GITHUB_WORKSPACE/patch-source/patches"
           source_dir="$GITHUB_WORKSPACE/source"
-          patch_root="$RUNNER_TEMP/reviewed-patches"
-
-          archive="$patch_source/tdesktop-mtproto-fingerprint-jitter-0010-reviewed.tar.gz"
-
-          if [[ ! -f "$archive" ]]; then
-            echo "::error::Reviewed patch archive was not found."
-            exit 1
-          fi
-
-          archive_sha="$(
-            sha256sum "$archive" |
-            awk '{ print $1 }'
-          )"
-
-          echo "Archive SHA256: $archive_sha"
-
-          if [[ "$archive_sha" != "$expected_archive_sha" ]]; then
-            echo "::error::Reviewed archive SHA256 does not match."
-            exit 1
-          fi
 
           source_sha="$(
             git -C "$source_dir" rev-parse HEAD
@@ -88,48 +66,19 @@ jobs:
             exit 1
           fi
 
-          expected_entries=(
-            "patches/0002-mtproto-selectable-hello.diff"
-            "patches/0003-mtproto-add-safari-hello.diff"
-            "patches/0004-mtproto-add-yandex-hello.diff"
-            "patches/0005-mtproto-experimental-pre-connect-timer.diff"
-            "patches/0006-add-delay-settings.diff"
-            "patches/0007-mtproto-connect-delay-rework.diff"
-            "patches/0008-main-menu-official-source-commit.diff"
+          patches=(
+            "$patch_source/0001-proxy-mtproto-client-hello-delay.diff"
+            "$patch_source/0002-main-menu-version-commit-build-tooltip.diff"
           )
 
-          mapfile -t actual_entries < <(
-            tar -tzf "$archive" |
-            sed -e 's#^\./##' -e '/\/$/d' |
-            LC_ALL=C sort
-          )
+          for patch in "${patches[@]}"; do
+            if [[ ! -f "$patch" ]]; then
+              echo "::error::Reviewed patch file was not found: $patch"
+              exit 1
+            fi
+          done
 
-          if (( ${#actual_entries[@]} != ${#expected_entries[@]} )); then
-            echo "::error::Unexpected number of files in the archive."
-            printf 'Expected:\n'
-            printf '  %s\n' "${expected_entries[@]}"
-            printf 'Actual:\n'
-            printf '  %s\n' "${actual_entries[@]}"
-            exit 1
-          fi
-
-          if [[ "${actual_entries[*]}" != "${expected_entries[*]}" ]]; then
-            echo "::error::Archive contents do not match the reviewed patch list."
-            printf 'Expected:\n'
-            printf '  %s\n' "${expected_entries[@]}"
-            printf 'Actual:\n'
-            printf '  %s\n' "${actual_entries[@]}"
-            exit 1
-          fi
-
-          rm -rf "$patch_root"
-          mkdir -p "$patch_root"
-
-          tar -xzf "$archive" -C "$patch_root"
-
-          for entry in "${expected_entries[@]}"; do
-            patch="$patch_root/$entry"
-
+          for patch in "${patches[@]}"; do
             echo "::group::Checking and applying $(basename "$patch")"
 
             git -C "$source_dir" apply \
@@ -144,79 +93,79 @@ jobs:
             echo "::endgroup::"
           done
 
-            menu_file="$source_dir/Telegram/SourceFiles/window/window_main_menu.cpp"
-            helper_file="$source_dir/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
-            source_short_sha="${source_sha:0:7}"
-            source_commit_time_utc="$(
-              TZ=UTC git -C "$source_dir" show -s \
-                --format=%cd \
-                --date=format-local:'%d.%m.%Y %H:%M:%SUTC' \
-                HEAD
-            )"
-            source_build_time_utc="$(date -u '+%d.%m.%Y %H:%M:%SUTC')"
+          menu_file="$source_dir/Telegram/SourceFiles/window/window_main_menu.cpp"
+          helper_file="$source_dir/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
+          source_short_sha="${source_sha:0:7}"
+          source_commit_time_utc="$(
+            TZ=UTC git -C "$source_dir" show -s \
+              --format=%cd \
+              --date=format-local:'%Y-%m-%d %H:%M:%S UTC' \
+              HEAD
+          )"
+          source_build_time_utc="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-            full_placeholder_count="$(
-              grep -Foc "__TDESKTOP_COMMIT_FULL__" "$menu_file" ||
-              true
-            )"
+          full_placeholder_count="$(
+            grep -Foc "__TDESKTOP_COMMIT_FULL__" "$menu_file" ||
+            true
+          )"
 
-            short_placeholder_count="$(
-              grep -Foc "__TDESKTOP_COMMIT_SHORT__" "$menu_file" ||
-              true
-            )"
+          short_placeholder_count="$(
+            grep -Foc "__TDESKTOP_COMMIT_SHORT__" "$menu_file" ||
+            true
+          )"
 
-            commit_time_placeholder_count="$(
-              grep -Foc "__TDESKTOP_COMMIT_TIME_UTC__" "$helper_file" ||
-              true
-            )"
+          commit_time_placeholder_count="$(
+            grep -Foc "__TDESKTOP_COMMIT_TIME_UTC__" "$helper_file" ||
+            true
+          )"
 
-            build_time_placeholder_count="$(
-              grep -Foc "__TDESKTOP_BUILD_TIME_UTC__" "$helper_file" ||
-              true
-            )"
+          build_time_placeholder_count="$(
+            grep -Foc "__TDESKTOP_BUILD_TIME_UTC__" "$helper_file" ||
+            true
+          )"
 
-            if [[ "$full_placeholder_count" != "1" ||
-                  "$short_placeholder_count" != "1" ||
-                  "$commit_time_placeholder_count" != "1" ||
-                  "$build_time_placeholder_count" != "1" ]]; then
-              echo "::error::Expected exactly one commit/build placeholder of each kind."
-              echo "Full placeholders:        $full_placeholder_count"
-              echo "Short placeholders:       $short_placeholder_count"
-              echo "Commit time placeholders: $commit_time_placeholder_count"
-              echo "Build time placeholders:  $build_time_placeholder_count"
-              exit 1
-            fi
+          if [[ "$full_placeholder_count" != "1" ||
+                "$short_placeholder_count" != "1" ||
+                "$commit_time_placeholder_count" != "1" ||
+                "$build_time_placeholder_count" != "1" ]]; then
+            echo "::error::Expected exactly one commit/build placeholder of each kind."
+            echo "Full placeholders:        $full_placeholder_count"
+            echo "Short placeholders:       $short_placeholder_count"
+            echo "Commit time placeholders: $commit_time_placeholder_count"
+            echo "Build time placeholders:  $build_time_placeholder_count"
+            exit 1
+          fi
 
-            sed -i \
-              -e "s|__TDESKTOP_COMMIT_FULL__|$source_sha|g" \
-              -e "s|__TDESKTOP_COMMIT_SHORT__|$source_short_sha|g" \
-              "$menu_file"
+          sed -i \
+            -e "s|__TDESKTOP_COMMIT_FULL__|$source_sha|g" \
+            -e "s|__TDESKTOP_COMMIT_SHORT__|$source_short_sha|g" \
+            "$menu_file"
 
-            sed -i \
-              -e "s|__TDESKTOP_COMMIT_TIME_UTC__|$source_commit_time_utc|g" \
-              -e "s|__TDESKTOP_BUILD_TIME_UTC__|$source_build_time_utc|g" \
-              "$helper_file"
+          sed -i \
+            -e "s|__TDESKTOP_COMMIT_TIME_UTC__|$source_commit_time_utc|g" \
+            -e "s|__TDESKTOP_BUILD_TIME_UTC__|$source_build_time_utc|g" \
+            "$helper_file"
 
-            if grep -Fq "__TDESKTOP_" "$menu_file" "$helper_file"; then
-              echo "::error::Commit/build placeholders remain after substitution."
-              exit 1
-            fi
+          if grep -Fq "__TDESKTOP_" "$menu_file" "$helper_file"; then
+            echo "::error::Commit/build placeholders remain after substitution."
+            exit 1
+          fi
 
-            grep -Fq \
-              "https://github.com/telegramdesktop/tdesktop/commit/$source_sha" \
-              "$menu_file"
+          grep -Fq \
+            "https://github.com/telegramdesktop/tdesktop/commit/$source_sha" \
+            "$menu_file"
 
-            grep -Fq \
-              "u\"$source_short_sha\"_q" \
-              "$menu_file"
+          grep -Fq \
+            "u\"$source_short_sha\"_q" \
+            "$menu_file"
 
-            grep -Fq \
-              "Commit: $source_commit_time_utc" \
-              "$helper_file"
+          grep -Fq \
+            "Commit: $source_commit_time_utc" \
+            "$helper_file"
 
-            grep -Fq \
-              "Build: $source_build_time_utc" \
-              "$helper_file"
+          grep -Fq \
+            "Build: $source_build_time_utc" \
+            "$helper_file"
 
           git -C "$source_dir" diff --check
 
@@ -227,18 +176,16 @@ jobs:
             echo "## Reviewed patch validation"
             echo
             echo "- upstream-dev SHA: \`$source_sha\`"
-            echo "- archive SHA256: \`$archive_sha\`"
-            echo "- applied patches: \`${#expected_entries[@]}\`"
+            echo "- applied patches: \`${#patches[@]}\`"
             echo "- result: all patches applied successfully"
           } >> "$GITHUB_STEP_SUMMARY"
 
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-
       - name: Start Windows build
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.validate.outputs.source_sha }}
         run: |
           set -euo pipefail
 
