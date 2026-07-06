@@ -514,6 +514,14 @@ index a3c962885..177f2305f 100644
  #include <range/v3/algorithm/reverse.hpp>
  
  namespace MTP::details {
+@@ -29,6 +37,6 @@ namespace {
+ 
+ constexpr auto kMaxGrease = 8;
+-constexpr auto kClientHelloLimit = 2048;
++constexpr auto kClientHelloLimit = 4096;
+ constexpr auto kHelloDigestLength = 32;
+ constexpr auto kLengthSize = sizeof(uint16);
+ const auto kServerHelloPart1 = qstr("\x16\x03\x03");
 @@ -35,7 +43,7 @@ const auto kClientHeader = qstr("\x17\x03\x03");
  using BigNum = openssl::BigNum;
  using BigNumContext = openssl::Context;
