@@ -1,5 +1,5 @@
 diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
-index b52dc8d..5a7f2b0 100644
+index b52dc8d..aa1c812 100644
 --- a/Telegram/Resources/langs/lang.strings
 +++ b/Telegram/Resources/langs/lang.strings
 @@ -1267,6 +1267,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -8,7 +8,7 @@ index b52dc8d..5a7f2b0 100644
  "lng_proxy_use_for_calls" = "Use proxy for calls";
 +"lng_proxy_chello_about"   = "MTProto Client Hello selection";
 +"lng_proxy_chello_chrome"  = "Chrome";
-+"lng_proxy_chello_chromium149" = "Chromium 149";
++"lng_proxy_chello_chromium150" = "Chromium 150";
 +"lng_proxy_chello_firefox" = "FireFox";
 +"lng_proxy_chello_custom"  = "Firefox (permutated ext)";
 +"lng_proxy_chello_random"  = "Random selection on each connection";
@@ -22,7 +22,7 @@ index b52dc8d..5a7f2b0 100644
  "lng_proxy_auto_switch_about" = "You can choose how quickly the app should auto-connect to the nearest active proxy if the current one stops working.";
  "lng_proxy_auto_switch_timeout#one" = "{count} s";
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31..17a6355 100644
+index 6d99e31..0ff6fd6 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -55,8 +55,8 @@ index 6d99e31..17a6355 100644
 +		return u"Safari (macOS)"_q;
 +	case ProxyData::CHelloType::YandexGost:
 +		return u"Yandex (GOST)"_q;
-+	case ProxyData::CHelloType::Chromium149:
-+		return u"Chromium 149"_q;
++	case ProxyData::CHelloType::Chromium150:
++		return u"Chromium 150"_q;
 +	case ProxyData::CHelloType::RANDOM:
 +		return u"Random"_q;
 +	case ProxyData::CHelloType::Firefox:
@@ -75,7 +75,7 @@ index 6d99e31..17a6355 100644
 +		result += u"Random -> "_q;
 +	}
 +	result += ClientHelloName(status.actual);
-+	if (status.chromium149) {
++	if (status.chromium150) {
 +		result += status.resumed ? u" resumed"_q : u" fresh"_q;
 +		if (status.ttlMinutes > 0) {
 +			result += status.resumed
@@ -153,8 +153,8 @@ index 6d99e31..17a6355 100644
 +		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
 +			inner,
 +			_proxyCHelloSettings,
-+			ProxyData::CHelloType::Chromium149,
-+			tr::lng_proxy_chello_chromium149(tr::now)),
++			ProxyData::CHelloType::Chromium150,
++			tr::lng_proxy_chello_chromium150(tr::now)),
 +		st::proxyUsePadding);
 +	inner->add(
 +		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
@@ -385,7 +385,7 @@ index 5de98bc..87bd5f3 100644
  	void setProxyRotationEnabled(bool enabled);
  	void setProxyRotationTimeout(int value);
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b..5bedac9 100644
+index 495bb0b..f3748d7 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
 @@ -13,6 +13,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -401,7 +401,7 @@ index 495bb0b..5bedac9 100644
 +	case MTP::ProxyData::CHelloType::Custom:  return 2;
 +	case MTP::ProxyData::CHelloType::SafariMac: return 3;
 +	case MTP::ProxyData::CHelloType::YandexGost: return 4;
-+	case MTP::ProxyData::CHelloType::Chromium149: return 5;
++	case MTP::ProxyData::CHelloType::Chromium150: return 5;
 +	}
 +	Unexpected("Bad type in ProxyCHelloTypesToInt");
 +}
@@ -414,7 +414,7 @@ index 495bb0b..5bedac9 100644
 +	case 2: return MTP::ProxyData::CHelloType::Custom;
 +	case 3: return MTP::ProxyData::CHelloType::SafariMac;
 +	case 4: return MTP::ProxyData::CHelloType::YandexGost;
-+	case 5: return MTP::ProxyData::CHelloType::Chromium149;
++	case 5: return MTP::ProxyData::CHelloType::Chromium150;
 +	}
 +	return MTP::ProxyData::CHelloType::Firefox;
 +}
@@ -561,7 +561,7 @@ index 1f2ec5c..f165ef3 100644
  	std::vector<MTP::ProxyData> _list;
  	std::vector<int> _proxyRotationPreferredIndices;
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index a3c9628..7f0641a 100644
+index a3c9628..4d1860a 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 @@ -8,20 +8,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1223,7 +1223,7 @@ index a3c9628..7f0641a 100644
 +	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
 +}
 +
-+[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules_Chromium149(const bool resumed) {
++[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules_Chromium150(const bool resumed) {
 +	using Scope = QVector<MTPTlsBlock>;
 +	using Permutation = std::vector<Scope>;
 +	using StackElement = std::variant<Scope, Permutation>;
@@ -1350,8 +1350,8 @@ index a3c9628..7f0641a 100644
 +		}
 +		StartPermutationElement(); {
 +			S(""
-+				"\x00\x0d\x00\x12\x00\x10\x04\x03\x08\x04\x04\x01\x05\x03"
-+				"\x08\x05\x05\x01\x08\x06\x06\x01"_q);
++				"\x00\x0d\x00\x18\x00\x16\x09\x04\x09\x05\x09\x06\x04\x03"
++				"\x08\x04\x04\x01\x05\x03\x08\x05\x05\x01\x08\x06\x06\x01"_q);
 +		}
 +		StartPermutationElement(); {
 +			S(""
@@ -1432,14 +1432,14 @@ index a3c9628..7f0641a 100644
 +	static MTPTlsClientHello chRules_custom  = PrepareClientHelloRules_Firefox(true);
 +	static MTPTlsClientHello chRules_safari  = PrepareClientHelloRules_SafariMac();
 +	static MTPTlsClientHello chRules_yandex  = PrepareClientHelloRules_YandexGost();
-+	static MTPTlsClientHello chRules_chromium149Fresh = PrepareClientHelloRules_Chromium149(false);
-+	static MTPTlsClientHello chRules_chromium149Resumed = PrepareClientHelloRules_Chromium149(true);
-+	static QMutex chromium149Mutex;
-+	struct Chromium149EndpointState {
++	static MTPTlsClientHello chRules_chromium150Fresh = PrepareClientHelloRules_Chromium150(false);
++	static MTPTlsClientHello chRules_chromium150Resumed = PrepareClientHelloRules_Chromium150(true);
++	static QMutex chromium150Mutex;
++	struct Chromium150EndpointState {
 +		std::chrono::steady_clock::time_point seenAt;
 +		std::chrono::minutes ttl;
 +	};
-+	static auto chromium149SeenByEndpoint = std::map<std::pair<QString, int>, Chromium149EndpointState>();
++	static auto chromium150SeenByEndpoint = std::map<std::pair<QString, int>, Chromium150EndpointState>();
 +	const auto configured_ch_type = MTP::ProxyData::globalClienHelloRulesType();
 +	auto ch_type = configured_ch_type;
 +	if (ProxyData::CHelloType::RANDOM == ch_type) {
@@ -1452,7 +1452,7 @@ index a3c9628..7f0641a 100644
 +		status.actual = actual_ch_type;
 +		status.endpoint = QString("%1:%2").arg(address).arg(port);
 +		status.random = (configured_ch_type == ProxyData::CHelloType::RANDOM);
-+		status.chromium149 = (actual_ch_type == ProxyData::CHelloType::Chromium149);
++		status.chromium150 = (actual_ch_type == ProxyData::CHelloType::Chromium150);
 +		status.resumed = resumed;
 +		status.ttlMinutes = ttlMinutes;
 +		status.ttlLeftMinutes = ttlLeftMinutes;
@@ -1474,14 +1474,14 @@ index a3c9628..7f0641a 100644
 +		case ProxyData::CHelloType::YandexGost:
 +			saveStatus(ch_type);
 +			return chRules_yandex;
-+		case ProxyData::CHelloType::Chromium149: {
++		case ProxyData::CHelloType::Chromium150: {
 +			int ttlMinutes = 0;
 +			int ttlLeftMinutes = 0;
 +			const auto resumed = [&] {
 +				namespace sc = std::chrono;
-+				const QMutexLocker lock(&chromium149Mutex);
++				const QMutexLocker lock(&chromium150Mutex);
 +				const auto now = sc::steady_clock::now();
-+				auto &state = chromium149SeenByEndpoint[{ address, port }];
++				auto &state = chromium150SeenByEndpoint[{ address, port }];
 +				const auto result = state.seenAt.time_since_epoch().count() != 0
 +					&& now - state.seenAt < state.ttl;
 +				if (!result) {
@@ -1500,8 +1500,8 @@ index a3c9628..7f0641a 100644
 +			}();
 +			saveStatus(ch_type, resumed, ttlMinutes, ttlLeftMinutes);
 +			return resumed
-+				? chRules_chromium149Resumed
-+				: chRules_chromium149Fresh;
++				? chRules_chromium150Resumed
++				: chRules_chromium150Fresh;
 +		}
 +		case ProxyData::CHelloType::Firefox:
 +		default:
@@ -1657,7 +1657,7 @@ index f1f2c54..a01d8fd 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f..7ddc775 100644
+index 367ee3f..c713b6c 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -29,6 +29,27 @@ struct ProxyData {
@@ -1671,7 +1671,7 @@ index 367ee3f..7ddc775 100644
 +		Custom,
 +		SafariMac, // Safari macOS 26.4 (with grease/alpn randomization)
 +		YandexGost, // Yandex Browser with GOST cipher suites
-+		Chromium149, // Ungoogled Chromium 149-like, based on tls.peet.ws captures
++		Chromium150, // Ungoogled Chromium 150-like, based on tls.peet.ws captures
 +		RANDOM
 +	};
 +	struct CHelloStatus {
@@ -1679,7 +1679,7 @@ index 367ee3f..7ddc775 100644
 +		CHelloType actual = CHelloType::Firefox;
 +		QString endpoint;
 +		bool random = false;
-+		bool chromium149 = false;
++		bool chromium150 = false;
 +		bool resumed = false;
 +		int ttlMinutes = 0;
 +		int ttlLeftMinutes = 0;
