@@ -151,6 +151,7 @@ jobs:
             build-patched-upstream-dev-windows.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref mtproto-patches \
-            -f "source_sha=${{ steps.sync.outputs.official_sha }}"
+            -f "source_sha=${{ steps.sync.outputs.official_sha }}" \
+            -f "variant=vanilla"
 
           echo "Vanilla Windows build dispatched for ${{ steps.sync.outputs.official_sha }}."

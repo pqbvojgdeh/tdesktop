@@ -1,4 +1,4 @@
-name: Build vanilla upstream dev Windows profile
+name: Build upstream dev Windows profile
 
 on:
   workflow_call:
@@ -9,6 +9,10 @@ on:
         type: string
       source_repository:
         description: Repository to checkout for the pinned source commit.
+        required: true
+        type: string
+      variant:
+        description: Build variant, vanilla or patched.
         required: true
         type: string
       cache_key:
@@ -71,6 +75,7 @@ jobs:
     env:
       REPO_NAME: tdesktop
       BUILD_PROFILE: ${{ inputs.profile }}
+      BUILD_VARIANT: ${{ inputs.variant }}
       BUILD_PROFILE_TITLE: ${{ inputs.profile_title }}
       BUILD_GENERATOR: ${{ inputs.generator }}
       BUILD_LTO_MODE: ${{ inputs.lto_mode }}
@@ -91,6 +96,14 @@ jobs:
           mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
           echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      - name: Checkout ClientHello patch
+        if: ${{ inputs.variant == 'patched' }}
+        uses: actions/checkout@v7
+        with:
+          ref: mtproto-patches
+          fetch-depth: 1
+          path: patch-source
 
       - name: Checkout pinned source commit
         uses: actions/checkout@v7
@@ -170,6 +183,30 @@ jobs:
 
           echo "SDK=$sdk" >> "$GITHUB_ENV"
           echo "Official Windows SDK requirement: $sdk"
+
+      - name: Apply adapted ClientHello patch
+        if: ${{ inputs.variant == 'patched' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
+          workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
+          patch_file="$workspace/patch-source/patches/0001-proxy-mtproto-client-hello-delay.diff"
+
+          if [[ ! -f "$patch_file" ]]; then
+            echo "::error::Adapted ClientHello patch was not found."
+            exit 1
+          fi
+
+          git -C "$source_dir" apply --check --verbose "$patch_file"
+          git -C "$source_dir" apply --verbose "$patch_file"
+          git -C "$source_dir" diff --check
+
+          grep -Fq "constexpr auto kMaxServerHelloLength = 65536;" \
+            "$source_dir/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
+
+          echo "Adapted ClientHello patch applied to $SOURCE_SHA."
 
       - name: Ensure ATL for MSVC 14.44 on Visual Studio 2026
         if: ${{ inputs.require_vs2026 }}
@@ -546,6 +583,7 @@ jobs:
               -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
               -D CMAKE_CONFIGURATION_TYPES=Release ^
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+              -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
@@ -558,6 +596,7 @@ jobs:
               -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
               -D CMAKE_CONFIGURATION_TYPES=Release ^
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+              -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
@@ -624,7 +663,8 @@ jobs:
           Source branch: dev
           Source commit: $env:SOURCE_SHA
           Mirror branch: upstream-dev
-          Source mode: vanilla (no patches)
+          Source mode: $env:BUILD_VARIANT
+          Release build workaround: AssertIsDebug=__noop
           Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
           Build profile: $env:BUILD_PROFILE
           Profile details: $env:BUILD_PROFILE_TITLE
@@ -668,7 +708,7 @@ jobs:
             -Path $packageDir |
             Out-Null
 
-          $archiveName = "tdesktop ($env:SOURCE_SHORT_SHA).7z"
+          $archiveName = "tdesktop-$env:BUILD_VARIANT ($env:SOURCE_SHORT_SHA).7z"
           $checksumName = "$archiveName.sha256"
           $archivePath = Join-Path $packageDir $archiveName
           $checksumPath = Join-Path $packageDir $checksumName
@@ -744,12 +784,13 @@ jobs:
 
           $buildParameters = (
             "Windows x64 · MSVC 14.44 · Qt 6 · " +
-            "$generatorName · IPO/LTO=$ltoValue"
+            "$generatorName · IPO/LTO=$ltoValue · $env:BUILD_VARIANT"
           )
 
           [ordered]@{
             source_sha = $env:SOURCE_SHA
             short_sha = $env:SOURCE_SHORT_SHA
+            variant = $env:BUILD_VARIANT
             profile = $env:BUILD_PROFILE
             profile_title = $env:BUILD_PROFILE_TITLE
             build_parameters = $buildParameters
@@ -773,7 +814,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@v7
         with:
-          name: Telegram-dev-${{ steps.source.outputs.short_sha }}-Windows-x64-${{ inputs.profile }}
+          name: Telegram-dev-${{ steps.source.outputs.short_sha }}-Windows-x64-${{ inputs.variant }}-${{ inputs.profile }}
           path: package-output\
           if-no-files-found: error
           compression-level: 0
@@ -801,6 +842,7 @@ jobs:
             $summary = @(
               "## Build profile succeeded"
               ""
+              "- variant: $env:BUILD_VARIANT"
               "- profile: $env:BUILD_PROFILE"
               "- details: $env:BUILD_PROFILE_TITLE"
               "- source: $env:SOURCE_SHA"
@@ -811,6 +853,7 @@ jobs:
             $summary = @(
               "## Build profile did not produce a package"
               ""
+              "- variant: $env:BUILD_VARIANT"
               "- profile: $env:BUILD_PROFILE"
               "- details: $env:BUILD_PROFILE_TITLE"
               "- next fallback: requested automatically"

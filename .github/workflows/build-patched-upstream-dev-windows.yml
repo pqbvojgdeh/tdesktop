@@ -1,4 +1,4 @@
-name: Build vanilla upstream dev Windows x64 Release
+name: Build upstream dev Windows x64 Release
 
 on:
   workflow_dispatch:
@@ -7,12 +7,20 @@ on:
         description: Optional full official telegramdesktop/tdesktop commit SHA to build instead of upstream-dev HEAD.
         required: false
         type: string
+      variant:
+        description: Source variant to build.
+        required: true
+        default: vanilla
+        type: choice
+        options:
+          - vanilla
+          - patched
 
 permissions:
   contents: read
 
 concurrency:
-  group: vanilla-upstream-dev-windows-release
+  group: upstream-dev-windows-release-${{ inputs.variant }}
   cancel-in-progress: false
 
 jobs:
@@ -557,6 +565,7 @@ jobs:
     with:
       source_sha: ${{ needs.source.outputs.source_sha }}
       source_repository: ${{ needs.source.outputs.source_repository }}
+      variant: ${{ inputs.variant }}
       cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
       runner: windows-2025-vs2026
       profile: release-ninja-p2
@@ -595,11 +604,12 @@ jobs:
         shell: bash
         env:
           SHORT_SHA: ${{ needs.source.outputs.short_sha }}
+          VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
 
           profile="release-ninja-p2"
-          artifact_name="Telegram-dev-$SHORT_SHA-Windows-x64-$profile"
+          artifact_name="Telegram-dev-$SHORT_SHA-Windows-x64-$VARIANT-$profile"
 
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
@@ -618,6 +628,7 @@ jobs:
         env:
           PINNED_SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
           SELECTED_PROFILE: ${{ steps.select.outputs.profile }}
+          SELECTED_VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
 
@@ -631,6 +642,7 @@ jobs:
 
           source_sha="$(jq -r '.source_sha' "$metadata")"
           short_sha="$(jq -r '.short_sha' "$metadata")"
+          variant="$(jq -r '.variant' "$metadata")"
           profile="$(jq -r '.profile' "$metadata")"
           build_parameters="$(jq -r '.build_parameters' "$metadata")"
           archive_name="$(jq -r '.archive_name' "$metadata")"
@@ -643,6 +655,11 @@ jobs:
 
           if [[ "$profile" != "$SELECTED_PROFILE" ]]; then
             echo "::error::Artifact profile does not match the selected profile."
+            exit 1
+          fi
+
+          if [[ "$variant" != "$SELECTED_VARIANT" ]]; then
+            echo "::error::Artifact variant does not match the requested variant."
             exit 1
           fi
 
@@ -676,6 +693,7 @@ jobs:
           {
             echo "source_sha=$source_sha"
             echo "short_sha=$short_sha"
+            echo "variant=$variant"
             echo "profile=$profile"
             echo "build_parameters=$build_parameters"
             echo "archive_path=$archive_path"
@@ -688,14 +706,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
           SHORT_SHA: ${{ steps.metadata.outputs.short_sha }}
+          VARIANT: ${{ steps.metadata.outputs.variant }}
           BUILD_PARAMETERS: ${{ steps.metadata.outputs.build_parameters }}
           ARCHIVE_PATH: ${{ steps.metadata.outputs.archive_path }}
           CHECKSUM_PATH: ${{ steps.metadata.outputs.checksum_path }}
         run: |
           set -euo pipefail
 
-          tag="tdesktop-dev-$SHORT_SHA"
-          title="$SHORT_SHA"
+          tag="tdesktop-dev-$VARIANT-$SHORT_SHA"
+          title="$SHORT_SHA ($VARIANT)"
           notes="$RUNNER_TEMP/release-notes.md"
           run_started_at="$(
             gh api \
@@ -729,9 +748,10 @@ jobs:
           gh release upload "$tag" "$ARCHIVE_PATH" "$CHECKSUM_PATH" --repo "$GITHUB_REPOSITORY" --clobber
 
           {
-            echo "## Published vanilla Telegram Desktop"
+            echo "## Published Telegram Desktop ($VARIANT)"
             echo
             echo "- commit: \`$SOURCE_SHA\`"
+            echo "- variant: \`$VARIANT\`"
             echo "- parameters: $BUILD_PARAMETERS"
           } >> "$GITHUB_STEP_SUMMARY"
 
