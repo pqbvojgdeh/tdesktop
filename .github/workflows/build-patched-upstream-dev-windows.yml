@@ -1,4 +1,4 @@
-name: Build patched upstream dev Windows x64 Release
+name: Build vanilla upstream dev Windows x64 Release
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: patched-upstream-dev-windows-release
+  group: vanilla-upstream-dev-windows-release
   cancel-in-progress: false
 
 jobs:
@@ -89,7 +89,7 @@ jobs:
               source_is_current=true
             elif [[ "$official_sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "::warning::upstream-dev is behind the current official dev head."
-              echo "::warning::Building the pinned, already-reviewed mirror commit."
+              echo "::warning::Building the exact pinned mirror commit."
             else
               echo "::warning::Could not resolve the current official dev SHA."
               official_sha=""
@@ -729,7 +729,7 @@ jobs:
           gh release upload "$tag" "$ARCHIVE_PATH" "$CHECKSUM_PATH" --repo "$GITHUB_REPOSITORY" --clobber
 
           {
-            echo "## Published patched Telegram Desktop"
+            echo "## Published vanilla Telegram Desktop"
             echo
             echo "- commit: \`$SOURCE_SHA\`"
             echo "- parameters: $BUILD_PARAMETERS"
