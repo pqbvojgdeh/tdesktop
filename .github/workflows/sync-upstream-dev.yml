@@ -34,7 +34,7 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout patch branch
+      - name: Checkout automation branch
         uses: actions/checkout@v7
         with:
           ref: mtproto-patches
@@ -78,7 +78,7 @@ jobs:
               echo "- official dev: \`$official_sha\`"
               echo "- fork upstream-dev: \`$current_sha\`"
               echo "- changed: no"
-              echo "- validation and build: skipped"
+              echo "- vanilla build: skipped"
             } >> "$GITHUB_STEP_SUMMARY"
 
             exit 0
@@ -106,7 +106,7 @@ jobs:
             echo "- official dev: \`$official_sha\`"
             echo "- fork upstream-dev: \`$mirrored_sha\`"
             echo "- changed: yes"
-            echo "- validation: requested"
+            echo "- vanilla build: requested"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cancel upstream-dev push workflows
@@ -139,7 +139,7 @@ jobs:
             done
           done
 
-      - name: Start reviewed patch validation
+      - name: Start vanilla Windows build
         if: steps.sync.outputs.changed == 'true'
         shell: bash
         env:
@@ -148,8 +148,9 @@ jobs:
           set -euo pipefail
 
           gh workflow run \
-            check-reviewed-patches-upstream-dev.yml \
+            build-patched-upstream-dev-windows.yml \
             --repo "$GITHUB_REPOSITORY" \
-            --ref mtproto-patches
+            --ref mtproto-patches \
+            -f "source_sha=${{ steps.sync.outputs.official_sha }}"
 
-          echo "Patch validation workflow dispatched."
+          echo "Vanilla Windows build dispatched for ${{ steps.sync.outputs.official_sha }}."
