@@ -595,6 +595,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    concurrency:
+      group: upstream-dev-release-publish-${{ needs.source.outputs.source_sha }}
+      cancel-in-progress: false
+
     permissions:
       contents: write
 
@@ -716,11 +720,51 @@ jobs:
           tag="tdesktop-dev-$SHORT_SHA"
           title="$SHORT_SHA"
           notes="$RUNNER_TEMP/release-notes.md"
+          vanilla_duration=""
+          patched_duration=""
+          run_started_at="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              --jq '.run_started_at'
+          )"
+          run_started_epoch="$(date -u -d "$run_started_at" '+%s')"
+          now_epoch="$(date -u '+%s')"
+          duration_seconds="$((now_epoch - run_started_epoch))"
+          if (( duration_seconds < 0 )); then
+            duration_seconds=0
+          fi
+          duration_minutes="$(((duration_seconds + 59) / 60))"
+          duration="$((duration_minutes / 60)) h $((duration_minutes % 60)) min"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_body="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')"
+            existing_durations="$(printf '%s\n' "$existing_body" | sed -n 's/^Build duration: //p' | tail -n 1)"
+            if [[ "$existing_durations" =~ vanilla[[:space:]]+([^·]+) ]]; then
+              vanilla_duration="${BASH_REMATCH[1]}"
+              vanilla_duration="${vanilla_duration% }"
+            fi
+            if [[ "$existing_durations" =~ patched[[:space:]]+(.+)$ ]]; then
+              patched_duration="${BASH_REMATCH[1]}"
+            fi
+          fi
+
+          if [[ "$VARIANT" == "vanilla" ]]; then
+            vanilla_duration="$duration"
+          else
+            patched_duration="$duration"
+          fi
 
           {
             printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
             printf 'tdesktop-vanilla.%s.7z — official upstream dev without patches\n' "$SHORT_SHA"
             printf 'tdesktop-patched.%s.7z — the same source with the MTProto ClientHello\n' "$SHORT_SHA"
+            if [[ -n "$vanilla_duration" && -n "$patched_duration" ]]; then
+              printf 'Build duration: vanilla %s · patched %s\n' "$vanilla_duration" "$patched_duration"
+            elif [[ -n "$vanilla_duration" ]]; then
+              printf 'Build duration: vanilla %s\n' "$vanilla_duration"
+            else
+              printf 'Build duration: patched %s\n' "$patched_duration"
+            fi
           } > "$notes"
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
