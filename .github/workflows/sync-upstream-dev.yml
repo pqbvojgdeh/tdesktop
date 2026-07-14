@@ -79,6 +79,7 @@ jobs:
               echo "- fork upstream-dev: \`$current_sha\`"
               echo "- changed: no"
               echo "- vanilla build: skipped"
+              echo "- patched build: skipped"
             } >> "$GITHUB_STEP_SUMMARY"
 
             exit 0
@@ -107,6 +108,7 @@ jobs:
             echo "- fork upstream-dev: \`$mirrored_sha\`"
             echo "- changed: yes"
             echo "- vanilla build: requested"
+            echo "- patched build: requested"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cancel upstream-dev push workflows
@@ -139,7 +141,7 @@ jobs:
             done
           done
 
-      - name: Start vanilla Windows build
+      - name: Start vanilla and patched Windows builds
         if: steps.sync.outputs.changed == 'true'
         shell: bash
         env:
@@ -147,11 +149,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh workflow run \
-            build-patched-upstream-dev-windows.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref mtproto-patches \
-            -f "source_sha=${{ steps.sync.outputs.official_sha }}" \
-            -f "variant=vanilla"
+          for variant in vanilla patched; do
+            gh workflow run \
+              build-patched-upstream-dev-windows.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref mtproto-patches \
+              -f "source_sha=${{ steps.sync.outputs.official_sha }}" \
+              -f "variant=$variant"
 
-          echo "Vanilla Windows build dispatched for ${{ steps.sync.outputs.official_sha }}."
+            echo "$variant Windows build dispatched for ${{ steps.sync.outputs.official_sha }}."
+          done
