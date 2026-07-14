@@ -713,36 +713,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          tag="tdesktop-dev-$VARIANT-$SHORT_SHA"
-          title="$SHORT_SHA ($VARIANT)"
+          tag="tdesktop-dev-$SHORT_SHA"
+          title="$SHORT_SHA (vanilla + patched)"
           notes="$RUNNER_TEMP/release-notes.md"
-          run_started_at="$(
-            gh api \
-              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-              --jq '.run_started_at'
-          )"
-
-          run_started_epoch="$(date -u -d "$run_started_at" '+%s')"
-          now_epoch="$(date -u '+%s')"
-          duration_seconds="$((now_epoch - run_started_epoch))"
-          if (( duration_seconds < 0 )); then
-            duration_seconds=0
-          fi
-
-          duration_minutes="$(((duration_seconds + 59) / 60))"
-          duration_hours="$((duration_minutes / 60))"
-          duration_remainder_minutes="$((duration_minutes % 60))"
-          build_duration="${duration_hours} h ${duration_remainder_minutes} min"
 
           {
             printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
-            printf 'Build duration: %s\n' "$build_duration"
+            printf '%s\n' 'Contains vanilla and patched 7z archives after both builds finish.'
+            printf 'Source: `%s`\n' "$SOURCE_SHA"
           } > "$notes"
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$notes" --prerelease
           else
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$title" --notes-file "$notes" --prerelease
+            if ! gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$title" --notes-file "$notes" --prerelease; then
+              # The other variant can create the shared release concurrently.
+              sleep 5
+              gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$notes" --prerelease
+            fi
           fi
 
           gh release upload "$tag" "$ARCHIVE_PATH" "$CHECKSUM_PATH" --repo "$GITHUB_REPOSITORY" --clobber
@@ -752,6 +741,7 @@ jobs:
             echo
             echo "- commit: \`$SOURCE_SHA\`"
             echo "- variant: \`$VARIANT\`"
+            echo "- shared release: \`$tag\`"
             echo "- parameters: $BUILD_PARAMETERS"
           } >> "$GITHUB_STEP_SUMMARY"
 
