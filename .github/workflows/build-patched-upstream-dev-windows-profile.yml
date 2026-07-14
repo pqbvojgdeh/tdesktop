@@ -708,7 +708,7 @@ jobs:
             -Path $packageDir |
             Out-Null
 
-          $archiveName = "tdesktop-$env:BUILD_VARIANT ($env:SOURCE_SHORT_SHA).7z"
+          $archiveName = "tdesktop-$($env:BUILD_VARIANT).$($env:SOURCE_SHORT_SHA).7z"
           $checksumName = "$archiveName.sha256"
           $archivePath = Join-Path $packageDir $archiveName
           $checksumPath = Join-Path $packageDir $checksumName
