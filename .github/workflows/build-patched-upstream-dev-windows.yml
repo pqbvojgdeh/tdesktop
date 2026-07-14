@@ -756,8 +756,10 @@ jobs:
 
           {
             printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
-            printf 'tdesktop-vanilla.%s.7z — official upstream dev without patches\n' "$SHORT_SHA"
-            printf 'tdesktop-patched.%s.7z — the same source with the MTProto ClientHello\n' "$SHORT_SHA"
+            printf '\n'
+            printf '**Vanilla:** `tdesktop-vanilla.%s.7z` — official upstream dev without patches  \n' "$SHORT_SHA"
+            printf '**Patched:** `tdesktop-patched.%s.7z` — with the MTProto ClientHello patch\n' "$SHORT_SHA"
+            printf '\n'
             if [[ -n "$vanilla_duration" && -n "$patched_duration" ]]; then
               printf 'Build duration: vanilla %s · patched %s\n' "$vanilla_duration" "$patched_duration"
             elif [[ -n "$vanilla_duration" ]]; then
