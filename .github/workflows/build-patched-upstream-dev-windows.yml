@@ -714,13 +714,13 @@ jobs:
           set -euo pipefail
 
           tag="tdesktop-dev-$SHORT_SHA"
-          title="$SHORT_SHA (vanilla + patched)"
+          title="$SHORT_SHA"
           notes="$RUNNER_TEMP/release-notes.md"
 
           {
             printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
-            printf '%s\n' 'Contains vanilla and patched 7z archives after both builds finish.'
-            printf 'Source: `%s`\n' "$SOURCE_SHA"
+            printf 'tdesktop-vanilla.%s.7z — official upstream dev without patches\n' "$SHORT_SHA"
+            printf 'tdesktop-patched.%s.7z — the same source with the MTProto ClientHello\n' "$SHORT_SHA"
           } > "$notes"
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
