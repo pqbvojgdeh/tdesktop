@@ -1,0 +1,122 @@
+diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
+index 34b5e9cc3..797648a63 100644
+--- a/Telegram/SourceFiles/window/window.style
++++ b/Telegram/SourceFiles/window/window.style
+@@ -112,7 +112,7 @@ mainMenuCoverNameTop: 84px;
+ mainMenuCoverStatusLeft: mainMenuCoverNameLeft;
+ mainMenuCoverStatusTop: 103px;
+ mainMenuSkip: 6px;
+-mainMenuFooterHeightMin: 80px;
++mainMenuFooterHeightMin: 101px;
+ mainMenu: Menu(defaultMenu) {
+ 	itemFg: windowBoldFg;
+ 	itemFgOver: windowBoldFgOver;
+@@ -153,11 +153,12 @@ mainMenuTelegramLabel: FlatLabel(defaultFlatLabel) {
+ 		linkFg: windowSubTextFg;
+ 	}
+ }
+-mainMenuTelegramBottom: 38px;
++mainMenuTelegramBottom: 59px;
+ mainMenuVersionLabel: FlatLabel(mainMenuTelegramLabel) {
+ 	style: defaultTextStyle;
+ }
+-mainMenuVersionBottom: 17px;
++mainMenuVersionBottom: 38px;
++mainMenuAboutBottom: 17px;
+ 
+ mainMenuToggleSize: 6px;
+ mainMenuToggleFourStrokes: 3px;
+diff --git a/Telegram/SourceFiles/window/window_main_menu.cpp b/Telegram/SourceFiles/window/window_main_menu.cpp
+index 89ecba366..1b00965b3 100644
+--- a/Telegram/SourceFiles/window/window_main_menu.cpp
++++ b/Telegram/SourceFiles/window/window_main_menu.cpp
+@@ -341,7 +341,9 @@ MainMenu::MainMenu(
+ , _footer(_inner->add(object_ptr<Ui::RpWidget>(_inner.get())))
+ , _telegram(
+ 	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuTelegramLabel))
+-, _version(AddVersionLabel(_footer)) {
++, _version(AddVersionLabel(_footer))
++, _about(
++	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuVersionLabel)) {
+ 	setAttribute(Qt::WA_OpaquePaintEvent);
+ 
+ 	setupUserpicButton();
+@@ -372,6 +374,7 @@ MainMenu::MainMenu(
+ 	) | rpl::on_next([=] {
+ 		_telegram->moveToLeft(st::mainMenuFooterLeft, _footer->height() - st::mainMenuTelegramBottom - _telegram->height());
+ 		_version->moveToLeft(st::mainMenuFooterLeft, _footer->height() - st::mainMenuVersionBottom - _version->height());
++		_about->moveToLeft(st::mainMenuFooterLeft, _footer->height() - st::mainMenuAboutBottom - _about->height());
+ 	}, _footer->lifetime());
+ 
+ 	rpl::combine(
+@@ -387,22 +390,31 @@ MainMenu::MainMenu(
+ 		u"Telegram Desktop"_q,
+ 		u"https://desktop.telegram.org"_q));
+ 	_telegram->setLinksTrusted();
++	class SourceCommitClickHandler final : public UrlClickHandler {
++	public:
++		SourceCommitClickHandler(QString url)
++		: UrlClickHandler(url) {
++		}
++
++		QString tooltip() const override {
++			return QString();
++		}
++
++	};
++	const auto sourceCommitShort = u"__TDESKTOP_COMMIT_SHORT__"_q;
++	const auto sourceCommitUrl = u"https://github.com/telegramdesktop/tdesktop/commit/__TDESKTOP_COMMIT_FULL__"_q;
+ 	_version->setMarkedText(
+ 		tr::link(
+-			tr::lng_settings_current_version(
+-				tr::now,
+-				lt_version,
+-				currentVersionText()),
+-			1) // Link 1.
+-		.append(QChar(' '))
+-		.append(QChar(8211))
+-		.append(QChar(' '))
+-		.append(tr::link(tr::lng_menu_about(tr::now), 2))); // Link 2.
++			currentVersionText()
++				.append(u" · "_q)
++				.append(sourceCommitShort),
++			1)); // Link 1.
+ 	_version->setLink(
+ 		1,
+-		std::make_shared<UrlClickHandler>(Core::App().changelogLink()));
+-	_version->setLink(
+-		2,
++		std::make_shared<SourceCommitClickHandler>(sourceCommitUrl));
++	_about->setMarkedText(tr::link(tr::lng_menu_about(tr::now), 1));
++	_about->setLink(
++		1,
+ 		std::make_shared<LambdaClickHandler>([=] {
+ 			controller->show(Box(AboutBox));
+ 		}));
+diff --git a/Telegram/SourceFiles/window/window_main_menu.h b/Telegram/SourceFiles/window/window_main_menu.h
+index 36a3087a0..552233b9a 100644
+--- a/Telegram/SourceFiles/window/window_main_menu.h
++++ b/Telegram/SourceFiles/window/window_main_menu.h
+@@ -103,6 +103,7 @@ private:
+ 	not_null<Ui::RpWidget*> _footer;
+ 	not_null<Ui::FlatLabel*> _telegram;
+ 	not_null<Ui::FlatLabel*> _version;
++	not_null<Ui::FlatLabel*> _about;
+ 	QPointer<Ui::SettingsButton> _nightThemeToggle;
+ 	rpl::event_stream<bool> _nightThemeSwitches;
+ 	base::Timer _nightThemeSwitch;
+diff --git a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
+index 7ee2c7b0d..4c9bf5309 100644
+--- a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
++++ b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
+@@ -46,9 +46,7 @@ namespace Window {
+ 	if constexpr (!Platform::IsMacStoreBuild()
+ 		&& !Platform::IsWindowsStoreBuild()) {
+ 		Ui::InstallTooltip(label, [] {
+-			return u"Build date: %1.\nQt version: %2."_q
+-				.arg(__DATE__)
+-				.arg(QT_VERSION_STR);
++			return u"Commit: __TDESKTOP_COMMIT_TIME_UTC__\nBuild: __TDESKTOP_BUILD_TIME_UTC__"_q;
+ 		});
+ 	}
+ 	return label;

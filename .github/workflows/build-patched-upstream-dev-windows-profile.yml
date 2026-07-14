@@ -97,7 +97,7 @@ jobs:
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
           echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
 
-      - name: Checkout ClientHello patch
+      - name: Checkout patched variant sources
         if: ${{ inputs.variant == 'patched' }}
         uses: actions/checkout@v7
         with:
@@ -184,7 +184,7 @@ jobs:
           echo "SDK=$sdk" >> "$GITHUB_ENV"
           echo "Official Windows SDK requirement: $sdk"
 
-      - name: Apply adapted ClientHello patch
+      - name: Apply patched variant changes and embed source metadata
         if: ${{ inputs.variant == 'patched' }}
         shell: bash
         run: |
@@ -192,21 +192,71 @@ jobs:
 
           source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
           workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
-          patch_file="$workspace/patch-source/patches/0001-proxy-mtproto-client-hello-delay.diff"
+          patch_dir="$workspace/patch-source/patches"
+          patches=(
+            "$patch_dir/0001-proxy-mtproto-client-hello-delay.diff"
+            "$patch_dir/0002-main-menu-version-commit-build-tooltip.diff"
+          )
 
-          if [[ ! -f "$patch_file" ]]; then
-            echo "::error::Adapted ClientHello patch was not found."
+          for patch in "${patches[@]}"; do
+            if [[ ! -f "$patch" ]]; then
+              echo "::error::Patched variant file was not found: $patch"
+              exit 1
+            fi
+          done
+
+          for patch in "${patches[@]}"; do
+            echo "::group::Applying $(basename "$patch")"
+            git -C "$source_dir" apply --check --verbose "$patch"
+            git -C "$source_dir" apply --verbose "$patch"
+            echo "::endgroup::"
+          done
+
+          menu_file="$source_dir/Telegram/SourceFiles/window/window_main_menu.cpp"
+          helper_file="$source_dir/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
+          source_commit_time_utc="$(
+            TZ=UTC git -C "$source_dir" show -s \
+              --format=%cd \
+              --date=format-local:'%Y-%m-%d %H:%M:%S UTC' \
+              HEAD
+          )"
+
+          full_placeholder_count="$(grep -Foc "__TDESKTOP_COMMIT_FULL__" "$menu_file" || true)"
+          short_placeholder_count="$(grep -Foc "__TDESKTOP_COMMIT_SHORT__" "$menu_file" || true)"
+          commit_time_placeholder_count="$(grep -Foc "__TDESKTOP_COMMIT_TIME_UTC__" "$helper_file" || true)"
+          build_time_placeholder_count="$(grep -Foc "__TDESKTOP_BUILD_TIME_UTC__" "$helper_file" || true)"
+
+          if [[ "$full_placeholder_count" != "1" ||
+                "$short_placeholder_count" != "1" ||
+                "$commit_time_placeholder_count" != "1" ||
+                "$build_time_placeholder_count" != "1" ]]; then
+            echo "::error::Expected exactly one source/build metadata placeholder of each kind."
             exit 1
           fi
 
-          git -C "$source_dir" apply --check --verbose "$patch_file"
-          git -C "$source_dir" apply --verbose "$patch_file"
+          sed -i \
+            -e "s|__TDESKTOP_COMMIT_FULL__|$SOURCE_SHA|g" \
+            -e "s|__TDESKTOP_COMMIT_SHORT__|$SOURCE_SHORT_SHA|g" \
+            "$menu_file"
+
+          sed -i \
+            -e "s|__TDESKTOP_COMMIT_TIME_UTC__|$source_commit_time_utc|g" \
+            "$helper_file"
+
+          if grep -Fq "__TDESKTOP_COMMIT_" "$menu_file" "$helper_file"; then
+            echo "::error::Commit placeholders remain after substitution."
+            exit 1
+          fi
+
           git -C "$source_dir" diff --check
 
           grep -Fq "constexpr auto kMaxServerHelloLength = 65536;" \
             "$source_dir/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
 
-          echo "Adapted ClientHello patch applied to $SOURCE_SHA."
+          grep -Fq "u\"$SOURCE_SHORT_SHA\"_q" "$menu_file"
+          grep -Fq "Commit: $source_commit_time_utc" "$helper_file"
+
+          echo "Patched variant changes applied to $SOURCE_SHA."
 
       - name: Ensure ATL for MSVC 14.44 on Visual Studio 2026
         if: ${{ inputs.require_vs2026 }}
@@ -604,6 +654,12 @@ jobs:
           )
 
           if errorlevel 1 exit /b 1
+
+          if /I "%BUILD_VARIANT%"=="patched" (
+            for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC', [Globalization.CultureInfo]::InvariantCulture)"`) do set "SOURCE_BUILD_TIME_UTC=%%i"
+            powershell -NoProfile -Command "$p = Join-Path $env:TBUILD '%REPO_NAME%\Telegram\SourceFiles\window\window_main_menu_helpers.cpp'; $text = [IO.File]::ReadAllText($p); if (-not $text.Contains('__TDESKTOP_BUILD_TIME_UTC__')) { throw 'Build time placeholder was not found.' }; $text = $text.Replace('__TDESKTOP_BUILD_TIME_UTC__', $env:SOURCE_BUILD_TIME_UTC); $encoding = New-Object System.Text.UTF8Encoding $false; [IO.File]::WriteAllText($p, $text, $encoding)"
+            if errorlevel 1 exit /b 1
+          )
 
           cmake --build ..\out ^
             --config Release ^
