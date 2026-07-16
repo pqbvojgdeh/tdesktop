@@ -624,6 +624,7 @@ jobs:
           set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF"
           if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2"
 
+          rem Temporary CMake 4.4 compatibility; remove after upstream handles CMP0218.
           if /I "%BUILD_GENERATOR%"=="official" (
             set "CMAKE_GENERATOR=Visual Studio 18 2026"
             call configure.bat ^
@@ -633,6 +634,7 @@ jobs:
               -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
               -D CMAKE_CONFIGURATION_TYPES=Release ^
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+              -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
@@ -646,6 +648,7 @@ jobs:
               -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
               -D CMAKE_CONFIGURATION_TYPES=Release ^
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+              -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^

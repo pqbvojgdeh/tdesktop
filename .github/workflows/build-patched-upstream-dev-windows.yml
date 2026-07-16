@@ -138,6 +138,9 @@ jobs:
       }}
     runs-on: windows-2025-vs2026
     timeout-minutes: 360
+    concurrency:
+      group: upstream-dev-dependencies-${{ needs.source.outputs.source_sha }}
+      cancel-in-progress: false
 
     outputs:
       cache_key: ${{ steps.cache_key.outputs.cache_key }}
