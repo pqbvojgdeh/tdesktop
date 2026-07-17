@@ -45,7 +45,7 @@ index 3e51338c1..3aec78458 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da..1c8464180 100644
+index 6d99e31da..f31cfa7cf 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -595,7 +595,7 @@ index 6d99e31da..1c8464180 100644
 +			const auto input = Ui::CreateChild<Ui::NumberInput>(
 +				row,
 +				st::connectionPortInputField,
-+				QString(),
++				rpl::single(QString()),
 +				value,
 +				maximum);
 +			const auto suffix = Ui::CreateChild<Ui::FlatLabel>(
@@ -691,7 +691,7 @@ index 6d99e31da..1c8464180 100644
 +	_proxyRotationTimeoutInput = Ui::CreateChild<Ui::NumberInput>(
 +		timeoutRow,
 +		st::connectionPortInputField,
-+		QString(),
++		rpl::single(QString()),
 +		QString::number(_settings.proxyRotationTimeout()),
 +		9999);
 +	const auto timeoutSuffix = Ui::CreateChild<Ui::FlatLabel>(
