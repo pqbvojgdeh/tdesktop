@@ -656,7 +656,7 @@ index 6d99e31da3..16e57fbbc5 100644
 +			QString::number(_settings.proxySlowJitter()),
 +			u"ms"_q,
 +			9999);
-+		_proxySlowModeOptions = _proxySlowModeOptionsLayout->entity().get();
++		_proxySlowModeOptions = _proxySlowModeOptionsLayout->entity();
 +	}
 +
  	_proxyForCalls = inner->add(
