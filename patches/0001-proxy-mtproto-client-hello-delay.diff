@@ -2006,7 +2006,7 @@ index c1fee2769..9aee7bce9 100644
  
  };
 diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
-index 571e14eb3..210f20ade 100644
+index 571e14eb3..97528924c 100644
 --- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 +++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -2018,12 +2018,15 @@ index 571e14eb3..210f20ade 100644
  namespace MTP {
  namespace details {
  namespace {
-@@ -93,8 +95,10 @@ void ResolvingConnection::domainResolved(
+@@ -93,8 +95,13 @@ void ResolvingConnection::domainResolved(
  	}
  	_proxy.resolvedExpireAt = expireAt;
  
 +	auto ordered = ips;
-+	std::stable_sort(begin(ordered), end(ordered), ProxyData::addressComesFirst);
++	std::stable_sort(
++		ordered.begin(),
++		ordered.end(),
++		ProxyData::addressComesFirst);
  	auto index = 0;
 -	for (const auto &ip : ips) {
 +	for (const auto &ip : ordered) {
@@ -3071,7 +3074,7 @@ index d4a90083e..da3934d74 100644
  	QByteArray _incoming;
  	int _incomingGoodDataOffset = 0;
 diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
-index a7dd178b7..b01216fa4 100644
+index a7dd178b7..06467f26b 100644
 --- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
 @@ -409,6 +409,10 @@ void Instance::Private::applyDomainIps(
@@ -3079,8 +3082,8 @@ index a7dd178b7..b01216fa4 100644
  		proxy.resolvedExpireAt = expireAt;
  		auto copy = ips;
 +		std::stable_sort(
-+			begin(copy),
-+			end(copy),
++			copy.begin(),
++			copy.end(),
 +			ProxyData::addressComesFirst);
  		auto &current = proxy.resolvedIPs;
  		const auto i = ranges::remove_if(current, [&](const QString &ip) {
