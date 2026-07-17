@@ -677,13 +677,27 @@ jobs:
           rem while the resulting objects and PCH files remain reusable below.
           if /I "%BUILD_VARIANT%"=="patched" if /I "%BUILD_GENERATOR%"=="ninja" (
             ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/boxes/connection_box.cpp.obj ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/core_settings_proxy.cpp.obj ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/proxy_rotation_manager.cpp.obj ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_resolving.cpp.obj ^
-              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/details/mtproto_tls_socket.cpp.obj ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/mtp_instance.cpp.obj ^
-              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/mtproto_proxy_data.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/boxes/connection_box.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/core_settings_proxy.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/proxy_rotation_manager.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_resolving.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/details/mtproto_tls_socket.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/mtp_instance.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/mtproto_proxy_data.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
               Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/proxy_check.cpp.obj
             if errorlevel 1 exit /b 1
           )
