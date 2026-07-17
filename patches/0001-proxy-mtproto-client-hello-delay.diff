@@ -1346,6 +1346,13 @@ diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/
 index 5de98bc663..bf2acb9d04 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
+@@ -11,5 +11,5 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "base/timer.h"
+ #include "base/object_ptr.h"
+ #include "core/core_settings_proxy.h"
+-#include "mtproto/connection_abstract.h"
++#include "mtproto/proxy_check.h"
+ #include "mtproto/mtproto_proxy_data.h"
 @@ -20,6 +20,7 @@ class InputField;
  class PortInput;
  class PasswordInput;
