@@ -83,6 +83,7 @@ jobs:
       REQUIRE_VS2026: ${{ inputs.require_vs2026 }}
       TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
       TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+      SCCACHE_GHA_ENABLED: "true"
 
     defaults:
       run:
@@ -615,6 +616,9 @@ jobs:
             exit 1
           }
 
+      - name: Enable shared MSVC compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
       - name: Configure and build selected profile
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{ inputs.parallel }}
@@ -636,6 +640,8 @@ jobs:
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
               -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
+              -D CMAKE_C_COMPILER_LAUNCHER=sccache ^
+              -D CMAKE_CXX_COMPILER_LAUNCHER=sccache ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
@@ -650,6 +656,8 @@ jobs:
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
               -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
+              -D CMAKE_C_COMPILER_LAUNCHER=sccache ^
+              -D CMAKE_CXX_COMPILER_LAUNCHER=sccache ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^

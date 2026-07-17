@@ -1,5 +1,5 @@
 diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
-index 6c430c8..360d15f 100644
+index fb81bb4903..da6110692d 100644
 --- a/Telegram/Resources/langs/lang.strings
 +++ b/Telegram/Resources/langs/lang.strings
 @@ -1268,6 +1268,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -21,8 +21,31 @@ index 6c430c8..360d15f 100644
  "lng_proxy_auto_switch" = "Auto-switch proxies";
  "lng_proxy_auto_switch_about" = "You can choose how quickly the app should auto-connect to the nearest active proxy if the current one stops working.";
  "lng_proxy_auto_switch_timeout#one" = "{count} s";
+diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
+index 3e51338c13..e31ebdcf55 100644
+--- a/Telegram/SourceFiles/boxes/boxes.style
++++ b/Telegram/SourceFiles/boxes/boxes.style
+@@ -697,10 +697,18 @@ groupStickersField: InputField(defaultMultiSelectSearchField) {
+ groupStickersSubTitleHeight: 48px;
+ 
+ proxyUsePadding: margins(22px, 6px, 22px, 5px);
++proxySettingsWidth: 500px;
++proxySettingsControlLabelWidth: 160px;
++proxySettingsNumberWidth: 90px;
++proxySettingsUnitWidth: 28px;
+ proxyTryIPv6Padding: margins(22px, 8px, 22px, 5px);
+ proxyRowPadding: margins(22px, 8px, 8px, 8px);
++proxyRowSelectedPadding: margins(6px, 2px, 6px, 2px);
++proxyRowSelectedRadius: 8px;
++proxyRowSelectedBg: windowBgOver;
+ proxyRowIconSkip: 32px;
+ proxyRowSkip: 2px;
++proxyRowStatusSkip: 8px;
+ proxyRowRipple: defaultRippleAnimationBgOver;
+ proxyRowTitleFg: windowFg;
+ proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31..0ff6fd6 100644
+index 6d99e31da3..cac09fcd2a 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -33,157 +56,513 @@ index 6d99e31..0ff6fd6 100644
  #include "ui/wrap/slide_wrap.h"
  #include "ui/wrap/table_layout.h"
  #include "ui/wrap/vertical_layout.h"
-@@ -59,6 +60,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -59,30 +60,82 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "styles/style_menu_icons.h"
  #include "styles/style_settings.h"
  
 +#include <QtCore/QTimer>
++#include <QtCore/QTime>
  #include <QtGui/QGuiApplication>
  #include <QtGui/QClipboard>
  #include <QtWidgets/QTextEdit>
-@@ -69,6 +71,50 @@ constexpr auto kSaveSettingsDelayedTimeout = crl::time(1000);
+ 
++#include <array>
++
+ namespace {
+ 
+ constexpr auto kSaveSettingsDelayedTimeout = crl::time(1000);
  
  using ProxyData = MTP::ProxyData;
  
+-[[nodiscard]] int ClosestProxyRotationTimeoutSection(int value) {
+-	auto result = 0;
+-	auto bestDistance = 0;
+-	for (auto i = 0; i != int(Core::SettingsProxy::kProxyRotationTimeouts.size()); ++i) {
+-		const auto current = Core::SettingsProxy::kProxyRotationTimeouts[i];
+-		const auto distance = (current > value) ? (current - value) : (value - current);
+-		if ((i == 0) || (distance < bestDistance)) {
+-			result = i;
+-			bestDistance = distance;
+-		}
++[[nodiscard]] bool UsesFakeTls(const ProxyData &proxy) {
++	if (proxy.type != ProxyData::Type::Mtproto) {
++		return false;
++	}
++	const auto secret = proxy.secretFromMtprotoPassword();
++	return secret.size() >= 21 && secret[0] == bytes::type(0xEE);
++}
++
 +[[nodiscard]] QString ClientHelloName(ProxyData::CHelloType type) {
 +	switch (type) {
 +	case ProxyData::CHelloType::Chrome:
-+		return u"Chrome"_q;
++		return u"Google Chrome (Telegram profile)"_q;
 +	case ProxyData::CHelloType::Custom:
-+		return u"Firefox (permuted ext)"_q;
++		return u"Mozilla Firefox 151 — permuted extensions"_q;
 +	case ProxyData::CHelloType::SafariMac:
-+		return u"Safari (macOS)"_q;
++		return u"Apple Safari 26.4 (macOS)"_q;
 +	case ProxyData::CHelloType::YandexGost:
-+		return u"Yandex (GOST)"_q;
++		return u"Yandex Browser (GOST)"_q;
 +	case ProxyData::CHelloType::Chromium150:
 +		return u"Chromium 150"_q;
 +	case ProxyData::CHelloType::RANDOM:
-+		return u"Random"_q;
++		return u"Random on each connection"_q;
 +	case ProxyData::CHelloType::Firefox:
 +	default:
-+		return u"FireFox"_q;
++		return u"Mozilla Firefox 151"_q;
 +	}
 +}
 +
 +[[nodiscard]] QString ClientHelloStatusText() {
 +	const auto status = ProxyData::globalCHelloStatus();
 +	if (!status.used) {
-+		return u"Last ClientHello: not used yet"_q;
++		return u"Last connection\nNot used yet"_q;
 +	}
-+	auto result = u"Last ClientHello: "_q;
++	auto result = u"Last connection\n"_q;
 +	if (status.random) {
-+		result += u"Random -> "_q;
++		result += u"Random selection · "_q;
 +	}
 +	result += ClientHelloName(status.actual);
 +	if (status.chromium150) {
-+		result += status.resumed ? u" resumed"_q : u" fresh"_q;
-+		if (status.ttlMinutes > 0) {
-+			result += status.resumed
-+				? u", TTL left ~%1 min"_q.arg(status.ttlLeftMinutes)
-+				: u", resumed window %1 min"_q.arg(status.ttlMinutes);
-+		}
++		result += status.resumed
++			? u" · resumed profile"_q
++			: u" · fresh profile"_q;
 +	}
 +	if (!status.endpoint.isEmpty()) {
-+		result += u" ("_q + status.endpoint + u")"_q;
++		result += u"\n"_q + status.endpoint;
 +	}
-+	return result;
++	if (status.chromium150 && status.ttlMinutes > 0) {
++		result += status.resumed
++			? u"\nProfile refresh in %1 min"_q.arg(status.ttlLeftMinutes)
++			: u"\nResume window: %1 min"_q.arg(status.ttlMinutes);
+ 	}
+ 	return result;
+ }
+ 
++[[nodiscard]] QString SlowModeSummary(const Core::SettingsProxy &settings) {
++	return settings.proxySlowMode()
++		? u"Current range: %1–%2 ms"_q
++			.arg(settings.proxySlowDelay())
++			.arg(settings.proxySlowDelay() + settings.proxySlowJitter())
++		: u"No additional delay"_q;
 +}
 +
- [[nodiscard]] int ClosestProxyRotationTimeoutSection(int value) {
- 	auto result = 0;
- 	auto bestDistance = 0;
-@@ -626,16 +672,26 @@ private:
+ [[nodiscard]] std::vector<QString> ExtractLinkCandidates(const QString &input) {
+ 	auto urls = std::vector<QString>();
+ 	static const auto urlRegex = QRegularExpression(
+@@ -560,6 +613,7 @@ public:
+ 	ProxyRow(QWidget *parent, View &&view);
+ 
+ 	void updateFields(View &&view);
++	void setSelectionEnabled(bool enabled);
+ 
+ 	rpl::producer<> deleteClicks() const;
+ 	rpl::producer<> restoreClicks() const;
+@@ -582,6 +636,7 @@ private:
+ 	View _view;
+ 
+ 	Ui::Text::String _title;
++	QString _endpoint;
+ 	object_ptr<Ui::IconButton> _menuToggle;
+ 	rpl::event_stream<> _deleteClicks;
+ 	rpl::event_stream<> _restoreClicks;
+@@ -591,6 +646,7 @@ private:
+ 	base::unique_qptr<Ui::DropdownMenu> _menu;
+ 
+ 	bool _set = false;
++	bool _selectionEnabled = true;
+ 	Ui::Animations::Simple _toggled;
+ 	Ui::Animations::Simple _setAnimation;
+ 	std::unique_ptr<Ui::InfiniteRadialAnimation> _progress;
+@@ -626,16 +682,33 @@ private:
  	int rowHeight() const;
  	void refreshProxyForCalls();
  	void refreshProxyRotation();
 +	void refreshProxySlowMode();
 +	void refreshProxyCHelloStatus();
++	void refreshCustomControls();
++	void rebuildRows();
  
  	not_null<ProxiesBoxController*> _controller;
  	Core::SettingsProxy &_settings;
- 	QPointer<Ui::Checkbox> _tryIPv6;
+-	QPointer<Ui::Checkbox> _tryIPv6;
  	std::shared_ptr<Ui::RadioenumGroup<ProxyData::Settings>> _proxySettings;
-+	std::shared_ptr<Ui::RadioenumGroup<ProxyData::CHelloType>> _proxyCHelloSettings;
++	QPointer<Settings::Button> _proxyAddressPriorityButton;
++	QPointer<Settings::Button> _proxyCHelloButton;
++	rpl::variable<QString> _proxyAddressPriorityLabel;
++	rpl::variable<QString> _proxyCHelloLabel;
 +	QPointer<Ui::FlatLabel> _proxyCHelloStatus;
 +	QPointer<QTimer> _proxyCHelloStatusTimer;
  	QPointer<Ui::SlideWrap<Ui::Checkbox>> _proxyForCalls;
  	QPointer<Ui::SlideWrap<Ui::Checkbox>> _proxyRotation;
  	QPointer<Ui::SlideWrap<Ui::VerticalLayout>> _proxyRotationOptions;
- 	QPointer<Ui::SettingsSlider> _proxyRotationTimeout;
+-	QPointer<Ui::SettingsSlider> _proxyRotationTimeout;
++	QPointer<Ui::NumberInput> _proxyRotationTimeoutInput;
  	QPointer<Ui::DividerLabel> _about;
 +	QPointer<Ui::Checkbox> _proxySlowMode;
++	QPointer<Ui::FlatLabel> _proxySlowSummary;
 +	QPointer<Ui::SlideWrap<Ui::VerticalLayout>> _proxySlowModeOptionsLayout;
-+	QPointer<Ui::FixedHeightWidget> _proxySlowModeOptions;
++	QPointer<Ui::VerticalLayout> _proxySlowModeOptions;
 +	QPointer<Ui::NumberInput> _proxySlowDelayInput;
 +	QPointer<Ui::NumberInput> _proxySlowJitterInput;
++	QPointer<Settings::Button> _refreshChecksButton;
++	rpl::variable<QString> _checksCaption = u"Completed"_q;
  	base::unique_qptr<Ui::RpWidget> _noRows;
  	object_ptr<Ui::VerticalLayout> _initialWrap;
  	QPointer<Ui::VerticalLayout> _wrap;
-@@ -1137,6 +1193,133 @@ void ProxiesBox::setupContent() {
- 			ProxyData::Settings::Enabled,
- 			tr::lng_proxy_use_custom(tr::now)),
+@@ -746,13 +819,12 @@ void ProxyRow::updateFields(View &&view) {
+ 			st::defaultRadio.duration);
+ 	}
+ 	_view = std::move(view);
+-	const auto endpoint = _view.host + ':' + QString::number(_view.port);
++	_endpoint = qthelp::is_ipv6(_view.host)
++		? (u"["_q + _view.host + u"]:"_q + QString::number(_view.port))
++		: (_view.host + u":"_q + QString::number(_view.port));
+ 	_title.setMarkedText(
+ 		st::proxyRowTitleStyle,
+-		TextWithEntities()
+-			.append(_view.type)
+-			.append(' ')
+-			.append(tr::link(endpoint, QString())),
++		TextWithEntities().append(_view.type),
+ 		Ui::ItemTextDefaultOptions());
+ 
+ 	const auto state = _view.state;
+@@ -786,7 +858,7 @@ void ProxyRow::updateFields(View &&view) {
+ 			st::defaultRadio.duration);
+ 	}
+ 
+-	setPointerCursor(!_view.deleted);
++	setPointerCursor(_selectionEnabled && !_view.deleted);
+ 
+ 	update();
+ }
+@@ -797,11 +869,19 @@ void ProxyRow::radialAnimationCallback() {
+ 	}
+ }
+ 
++void ProxyRow::setSelectionEnabled(bool enabled) {
++	_selectionEnabled = enabled;
++	setPointerCursor(enabled && !_view.deleted);
++	update();
++}
++
+ int ProxyRow::resizeGetHeight(int newWidth) {
+ 	const auto result = st::proxyRowPadding.top()
+ 		+ st::semiboldFont->height
+ 		+ st::proxyRowSkip
+ 		+ st::normalFont->height
++		+ st::proxyRowSkip
++		+ st::normalFont->height
+ 		+ st::proxyRowPadding.bottom();
+ 	auto right = st::proxyRowPadding.right();
+ 	_menuToggle->moveToRight(
+@@ -817,6 +897,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
+ 
+ void ProxyRow::paintEvent(QPaintEvent *e) {
+ 	Painter p(this);
++	if (_view.selected && !_view.deleted) {
++		p.setPen(Qt::NoPen);
++		p.setBrush(st::proxyRowSelectedBg);
++		p.drawRoundedRect(
++			rect().marginsRemoved(st::proxyRowSelectedPadding),
++			st::proxyRowSelectedRadius,
++			st::proxyRowSelectedRadius);
++	}
+ 
+ 	if (!_view.deleted) {
+ 		paintRipple(p, 0, 0);
+@@ -830,7 +918,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+ 		p.setOpacity(st::stickersRowDisabledOpacity);
+ 	}
+ 
++	p.save();
++	if (!_selectionEnabled) {
++		p.setOpacity(st::stickersRowDisabledOpacity);
++	}
+ 	paintCheck(p);
++	p.restore();
+ 
+ 	p.setPen(st::proxyRowTitleFg);
+ 	p.setFont(st::semiboldFont);
+@@ -850,41 +943,69 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+ 			return st::proxyRowStatusFg;
+ 		}
+ 	}();
++	p.setFont(st::normalFont);
+ 	const auto status = [&] {
+ 		switch (_view.state) {
+-		case State::Available:
+-			return tr::lng_proxy_available(
+-				tr::now,
+-				lt_ping,
+-				QString::number(_view.ping));
+-		case State::Checking:
+-			return tr::lng_proxy_checking(tr::now);
+-		case State::Connecting:
+-			return tr::lng_proxy_connecting(tr::now);
+-		case State::Online:
+-			return tr::lng_proxy_online(tr::now);
+-		case State::Unavailable:
+-			return tr::lng_proxy_unavailable(tr::now);
++		case State::Available: return u"available"_q;
++		case State::Checking: return u"checking…"_q;
++		case State::Connecting: return u"connecting…"_q;
++		case State::Online: return u"connected"_q;
++		case State::Unavailable: return u"unavailable"_q;
+ 		}
+ 		Unexpected("State in ProxyRow::paintEvent.");
+ 	}();
++	const auto statusWidth = st::normalFont->width(status);
++	const auto statusSkip = st::proxyRowStatusSkip;
++	const auto endpointAvailable = std::max(
++		availableWidth - statusWidth - statusSkip,
++		0);
++	const auto endpoint = st::normalFont->elided(
++		_endpoint,
++		endpointAvailable,
++		Qt::ElideMiddle);
++	p.setPen(st::proxyRowTitleFg);
++	p.drawTextLeft(left, top, width(), endpoint);
++	const auto statusLeft = left
++		+ st::normalFont->width(endpoint)
++		+ statusSkip;
+ 	p.setPen(_view.deleted ? st::proxyRowStatusFg : statusFg);
+-	p.setFont(st::normalFont);
++	p.drawTextLeft(statusLeft, top, width(), status);
++	top += st::normalFont->height + st::proxyRowSkip;
+ 
+-	auto statusLeft = left;
++	auto detailLeft = left;
+ 	if (_checking) {
+ 		_checking->draw(
+ 			p,
+ 			{
+-				st::proxyCheckingPosition.x() + statusLeft,
++				st::proxyCheckingPosition.x() + detailLeft,
+ 				st::proxyCheckingPosition.y() + top
+ 			},
+ 			width());
+-		statusLeft += st::proxyCheckingPosition.x()
++		detailLeft += st::proxyCheckingPosition.x()
+ 			+ st::proxyCheckingAnimation.size.width()
+ 			+ st::proxyCheckingSkip;
+ 	}
+-	p.drawTextLeft(statusLeft, top, width(), status);
++	const auto detail = [&] {
++		if (_view.state == State::Checking) {
++			return u"Telegram RTT: measuring…"_q;
++		} else if (_view.state == State::Unavailable) {
++			return _view.checkedAt.isEmpty()
++				? u"Last check: unavailable"_q
++				: u"Last check: unavailable · checked "_q + _view.checkedAt;
++		} else if (_view.ping > 0) {
++			return u"Telegram RTT: %1 ms"_q.arg(_view.ping)
++				+ (_view.checkedAt.isEmpty()
++					? QString()
++					: u" · checked "_q + _view.checkedAt);
++		}
++		return QString();
++	}();
++	p.setPen(st::proxyRowStatusFg);
++	p.drawTextLeft(
++		detailLeft,
++		top,
++		width(),
++		st::normalFont->elided(detail, availableWidth));
+ 	top += st::normalFont->height + st::proxyRowPadding.bottom();
+ }
+ 
+@@ -962,23 +1083,23 @@ void ProxyRow::showMenu() {
+ 			const style::icon *icon) {
+ 		return _menu->addAction(text, std::move(callback), icon);
+ 	};
+-	addAction(tr::lng_proxy_menu_edit(tr::now), [=] {
++	addAction(u"Edit"_q, [=] {
+ 		_editClicks.fire({});
+ 	}, &st::menuIconEdit);
+ 	if (_view.supportsShare) {
+-		addAction(tr::lng_proxy_edit_share(tr::now), [=] {
++		addAction(u"Share"_q, [=] {
+ 			_shareClicks.fire({});
+ 		}, &st::menuIconShare);
+-		addAction(tr::lng_group_invite_context_qr(tr::now), [=] {
++		addAction(u"QR code"_q, [=] {
+ 			_showQrClicks.fire({});
+ 		}, &st::menuIconQrCode);
+ 	}
+ 	if (_view.deleted) {
+-		addAction(tr::lng_proxy_menu_restore(tr::now), [=] {
++		addAction(u"Restore"_q, [=] {
+ 			_restoreClicks.fire({});
+ 		}, &st::menuIconRestore);
+ 	} else {
+-		addAction(tr::lng_proxy_menu_delete(tr::now), [=] {
++		addAction(u"Delete"_q, [=] {
+ 			_deleteClicks.fire({});
+ 		}, &st::menuIconDelete);
+ 	}
+@@ -1020,6 +1141,9 @@ ProxiesBox::ProxiesBox(
+ 	const QString &highlightId)
+ : _controller(controller)
+ , _settings(settings)
++, _proxyAddressPriorityLabel(
++	settings.proxyPreferIPv6() ? u"Prefer IPv6"_q : u"Prefer IPv4"_q)
++, _proxyCHelloLabel(ClientHelloName(settings.proxyCHelloType()))
+ , _initialWrap(this)
+ , _highlightId(highlightId) {
+ 	_controller->views(
+@@ -1041,10 +1165,10 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
+ }
+ 
+ void ProxiesBox::prepare() {
+-	setTitle(tr::lng_proxy_settings());
++	setTitle(rpl::single(u"Proxy settings"_q));
+ 
+-	_addProxyButton = addButton(tr::lng_proxy_add(), [=] { addNewProxy(); });
+-	addButton(tr::lng_close(), [=] { closeBox(); });
++	_addProxyButton = addButton(rpl::single(u"Add proxy"_q), [=] { addNewProxy(); });
++	addButton(rpl::single(u"Close"_q), [=] { closeBox(); });
+ 
+ 	setupTopButton();
+ 	setupContent();
+@@ -1078,13 +1202,13 @@ void ProxiesBox::setupTopButton() {
+ 		const auto raw = menu->get();
+ 		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
+ 		addAction({
+-			.text = tr::lng_proxy_add_from_clipboard(tr::now),
++			.text = u"Add from clipboard"_q,
+ 			.handler = [=] { AddProxyFromClipboard(_controller, uiShow()); },
+ 			.icon = &st::menuIconImportTheme,
+ 		});
+ 		if (!_rows.empty()) {
+ 			addAction({
+-				.text = tr::lng_group_invite_context_delete_all(tr::now),
++				.text = u"Delete all"_q,
+ 				.handler = [=] { _controller->deleteItems(); },
+ 				.icon = &st::menuIconDeleteAttention,
+ 				.isAttention = true,
+@@ -1107,12 +1231,12 @@ void ProxiesBox::setupTopButton() {
+ void ProxiesBox::setupContent() {
+ 	const auto inner = setInnerWidget(object_ptr<Ui::VerticalLayout>(this));
+ 
+-	_tryIPv6 = inner->add(
+-		object_ptr<Ui::Checkbox>(
++	inner->add(
++		object_ptr<Ui::FlatLabel>(
+ 			inner,
+-			tr::lng_connection_try_ipv6(tr::now),
+-			_settings.tryIPv6()),
+-		st::proxyTryIPv6Padding);
++			u"Connection"_q,
++			st::proxyEditTitle),
++		st::proxyEditTitlePadding);
+ 	_proxySettings
+ 		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
+ 			_settings.settings());
+@@ -1121,22 +1245,198 @@ void ProxiesBox::setupContent() {
+ 			inner,
+ 			_proxySettings,
+ 			ProxyData::Settings::Disabled,
+-			tr::lng_proxy_disable(tr::now)),
++			u"Disable proxy"_q),
  		st::proxyUsePadding);
-+	// ++ ClientHello customization
+ 	inner->add(
+ 		object_ptr<Ui::Radioenum<ProxyData::Settings>>(
+ 			inner,
+ 			_proxySettings,
+ 			ProxyData::Settings::System,
+-			tr::lng_proxy_use_system_settings(tr::now)),
++			u"Use system proxy settings"_q),
+ 		st::proxyUsePadding);
+ 	inner->add(
+ 		object_ptr<Ui::Radioenum<ProxyData::Settings>>(
+ 			inner,
+ 			_proxySettings,
+ 			ProxyData::Settings::Enabled,
+-			tr::lng_proxy_use_custom(tr::now)),
++			u"Use custom proxy"_q),
+ 		st::proxyUsePadding);
++
++	_proxyAddressPriorityButton = Settings::AddButtonWithLabel(
++		inner,
++		rpl::single(u"Proxy address priority"_q),
++		_proxyAddressPriorityLabel.value(),
++		st::settingsButtonNoIcon);
++	const auto addressMenu = _proxyAddressPriorityButton->lifetime().make_state<
++		base::unique_qptr<Ui::PopupMenu>>();
++	_proxyAddressPriorityButton->addClickHandler([=] {
++		*addressMenu = base::make_unique_q<Ui::PopupMenu>(
++			_proxyAddressPriorityButton,
++			st::popupMenuWithIcons);
++		const auto raw = addressMenu->get();
++		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
++		for (const auto preferIPv6 : { true, false }) {
++			const auto text = preferIPv6
++				? u"Prefer IPv6"_q
++				: u"Prefer IPv4"_q;
++			addAction({
++				.text = text,
++				.handler = [=] {
++					if (_controller->setProxyPreferIPv6(preferIPv6)) {
++						_proxyAddressPriorityLabel = text;
++					}
++				},
++			});
++		}
++		raw->popup(_proxyAddressPriorityButton->mapToGlobal(QPoint(
++			_proxyAddressPriorityButton->width(),
++			_proxyAddressPriorityButton->height())));
++	});
 +	inner->add(
 +		object_ptr<Ui::FlatLabel>(
 +			inner,
-+			tr::lng_proxy_chello_about(tr::now),
++			u"For hostnames only; falls back to the other address family"_q,
++			st::boxDividerLabel),
++		st::proxyAboutPadding);
++
++	inner->add(
++		object_ptr<Ui::FlatLabel>(
++			inner,
++			u"MTProto disguise"_q,
 +			st::proxyEditTitle),
 +		st::proxyEditTitlePadding);
-+
-+	_proxyCHelloSettings
-+		= std::make_shared<Ui::RadioenumGroup<ProxyData::CHelloType>>(
-+			_settings.proxyCHelloType());
-+
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
-+			ProxyData::CHelloType::Firefox,
-+			tr::lng_proxy_chello_firefox(tr::now)),
-+		st::proxyUsePadding);
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
-+			ProxyData::CHelloType::Chrome,
-+			tr::lng_proxy_chello_chrome(tr::now)),
-+		st::proxyUsePadding);
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
-+			ProxyData::CHelloType::Chromium150,
-+			tr::lng_proxy_chello_chromium150(tr::now)),
-+		st::proxyUsePadding);
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
-+			ProxyData::CHelloType::Custom,
-+			tr::lng_proxy_chello_custom(tr::now)),
-+		st::proxyUsePadding);
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
-+			ProxyData::CHelloType::SafariMac,
-+			tr::lng_proxy_chello_safari_mac(tr::now)),
-+		st::proxyUsePadding);
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
-+			ProxyData::CHelloType::YandexGost,
-+			tr::lng_proxy_chello_yandex_gost(tr::now)),
-+		st::proxyUsePadding);
-+	inner->add(
-+		object_ptr<Ui::Radioenum<ProxyData::CHelloType>>(
-+			inner,
-+			_proxyCHelloSettings,
++	_proxyCHelloButton = Settings::AddButtonWithLabel(
++		inner,
++		rpl::single(u"ClientHello profile"_q),
++		_proxyCHelloLabel.value(),
++		st::settingsButtonNoIcon);
++	const auto clientMenu = _proxyCHelloButton->lifetime().make_state<
++		base::unique_qptr<Ui::PopupMenu>>();
++	_proxyCHelloButton->addClickHandler([=] {
++		*clientMenu = base::make_unique_q<Ui::PopupMenu>(
++			_proxyCHelloButton,
++			st::popupMenuWithIcons);
++		const auto raw = clientMenu->get();
++		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
++		const auto types = std::array{
 +			ProxyData::CHelloType::RANDOM,
-+			tr::lng_proxy_chello_random(tr::now)),
-+		st::proxyUsePadding);
++			ProxyData::CHelloType::SafariMac,
++			ProxyData::CHelloType::Chromium150,
++			ProxyData::CHelloType::Chrome,
++			ProxyData::CHelloType::Firefox,
++			ProxyData::CHelloType::Custom,
++			ProxyData::CHelloType::YandexGost,
++		};
++		for (const auto type : types) {
++			const auto text = ClientHelloName(type);
++			addAction({
++				.text = text,
++				.handler = [=] {
++					if (_controller->setProxyCHelloType(type)) {
++						_proxyCHelloLabel = text;
++					}
++				},
++			});
++		}
++		raw->popup(_proxyCHelloButton->mapToGlobal(QPoint(
++			_proxyCHelloButton->width(),
++			_proxyCHelloButton->height())));
++	});
 +	_proxyCHelloStatus = inner->add(
 +		object_ptr<Ui::FlatLabel>(
 +			inner,
@@ -201,18 +580,22 @@ index 6d99e31..0ff6fd6 100644
 +		refreshProxyCHelloStatus();
 +	});
 +	_proxyCHelloStatusTimer->start();
-+	// -- ClientHello customization
-+	// ++ proxy slow connect controls
 +	_proxySlowMode = inner->add(
 +		object_ptr<Ui::Checkbox>(
 +			inner,
-+			tr::lng_proxy_slow_mode(tr::now),
++			u"Delay repeated connections"_q,
 +			_settings.proxySlowMode()),
 +		style::margins(
 +			st::proxyTryIPv6Padding.left(),
 +			0,
 +			st::proxyTryIPv6Padding.right(),
 +			st::proxyTryIPv6Padding.top()));
++	_proxySlowSummary = inner->add(
++		object_ptr<Ui::FlatLabel>(
++			inner,
++			SlowModeSummary(_settings),
++			st::boxDividerLabel),
++		st::proxyAboutPadding);
 +
 +	{
 +		_proxySlowModeOptionsLayout = inner->add(
@@ -220,52 +603,169 @@ index 6d99e31..0ff6fd6 100644
 +				inner,
 +				object_ptr<Ui::VerticalLayout>(inner)));
 +
-+		_proxySlowModeOptions = _proxySlowModeOptionsLayout->entity()->add(
-+			object_ptr<Ui::FixedHeightWidget>(
-+				_proxySlowModeOptionsLayout->entity(),
-+				st::connectionPortInputField.heightMin),
-+			st::proxyEditInputPadding);
-+
-+		_proxySlowDelayInput = Ui::CreateChild<Ui::NumberInput>(
-+			_proxySlowModeOptions,
-+			st::connectionPortInputField,
-+			tr::lng_proxy_slow_delay(),
++		const auto addNumberRow = [=](
++				const QString &title,
++				const QString &value,
++				const QString &unit,
++				int maximum) {
++			const auto row = _proxySlowModeOptionsLayout->entity()->add(
++				object_ptr<Ui::FixedHeightWidget>(
++					_proxySlowModeOptionsLayout->entity(),
++					st::connectionPortInputField.heightMin),
++				st::proxyEditInputPadding);
++			const auto label = Ui::CreateChild<Ui::FlatLabel>(
++				row,
++				title,
++				st::defaultFlatLabel);
++			const auto input = Ui::CreateChild<Ui::NumberInput>(
++				row,
++				st::connectionPortInputField,
++				QString(),
++				value,
++				maximum);
++			const auto suffix = Ui::CreateChild<Ui::FlatLabel>(
++				row,
++				unit,
++				st::boxDividerLabel);
++			row->widthValue() | rpl::on_next([=](int width) {
++				label->resizeToNaturalWidth(st::proxySettingsControlLabelWidth);
++				label->moveToLeft(
++					0,
++					(row->height() - label->height()) / 2,
++					width);
++				input->resize(
++					st::proxySettingsNumberWidth,
++					input->height());
++				input->moveToRight(st::proxySettingsUnitWidth, 0, width);
++				suffix->resizeToNaturalWidth(st::proxySettingsUnitWidth);
++				suffix->moveToRight(
++					0,
++					(row->height() - suffix->height()) / 2,
++					width);
++			}, row->lifetime());
++			return input;
++		};
++		_proxySlowDelayInput = addNumberRow(
++			u"Minimum delay"_q,
 +			QString::number(_settings.proxySlowDelay()),
++			u"ms"_q,
 +			9999);
-+
-+		_proxySlowJitterInput = Ui::CreateChild<Ui::NumberInput>(
-+			_proxySlowModeOptions,
-+			st::connectionPortInputField,
-+			tr::lng_proxy_slow_jitter(),
++		_proxySlowJitterInput = addNumberRow(
++			u"Random jitter"_q,
 +			QString::number(_settings.proxySlowJitter()),
++			u"ms"_q,
 +			9999);
-+
-+		_proxySlowModeOptions->widthValue() | rpl::on_next([=](int width) {
-+			_proxySlowDelayInput->moveToLeft(0,0);
-+			_proxySlowJitterInput->moveToRight(0,0);
-+			_proxySlowDelayInput->resize(width / 2 - st::proxyEditSkip, _proxySlowDelayInput->height());
-+			_proxySlowJitterInput->resize(width / 2 - st::proxyEditSkip, _proxySlowJitterInput->height());
-+		}, _proxySlowModeOptions->lifetime());
-+
++		_proxySlowModeOptions = _proxySlowModeOptionsLayout->entity().get();
 +	}
-+	// -- proxy slow connect controls
 +
  	_proxyForCalls = inner->add(
  		object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
  			inner,
-@@ -1219,6 +1402,33 @@ void ProxiesBox::setupContent() {
+@@ -1159,7 +1459,7 @@ void ProxiesBox::setupContent() {
+ 			inner,
+ 			object_ptr<Ui::Checkbox>(
+ 				inner,
+-				tr::lng_proxy_auto_switch(tr::now),
++				u"Auto-switch proxies"_q,
+ 				_settings.proxyRotationEnabled()),
+ 			style::margins(
+ 				0,
+@@ -1175,24 +1475,48 @@ void ProxiesBox::setupContent() {
+ 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+ 			inner,
+ 			object_ptr<Ui::VerticalLayout>(inner)));
+-	_proxyRotationTimeout = _proxyRotationOptions->entity()->add(
+-		object_ptr<Ui::SettingsSlider>(
++	const auto timeoutRow = _proxyRotationOptions->entity()->add(
++		object_ptr<Ui::FixedHeightWidget>(
+ 			_proxyRotationOptions->entity(),
+-			st::settingsSlider),
+-		st::settingsBigScalePadding);
+-	for (const auto seconds : Core::SettingsProxy::kProxyRotationTimeouts) {
+-		_proxyRotationTimeout->addSection(
+-			tr::lng_proxy_auto_switch_timeout(
+-				tr::now,
+-				lt_count,
+-				seconds));
+-	}
+-	_proxyRotationTimeout->setActiveSectionFast(
+-		ClosestProxyRotationTimeoutSection(_settings.proxyRotationTimeout()));
++			st::connectionPortInputField.heightMin),
++		st::proxyEditInputPadding);
++	const auto timeoutLabel = Ui::CreateChild<Ui::FlatLabel>(
++		timeoutRow,
++		u"Connection timeout"_q,
++		st::defaultFlatLabel);
++	_proxyRotationTimeoutInput = Ui::CreateChild<Ui::NumberInput>(
++		timeoutRow,
++		st::connectionPortInputField,
++		QString(),
++		QString::number(_settings.proxyRotationTimeout()),
++		9999);
++	const auto timeoutSuffix = Ui::CreateChild<Ui::FlatLabel>(
++		timeoutRow,
++		u"s"_q,
++		st::boxDividerLabel);
++	timeoutRow->widthValue() | rpl::on_next([=](int width) {
++		timeoutLabel->resizeToNaturalWidth(st::proxySettingsControlLabelWidth);
++		timeoutLabel->moveToLeft(
++			0,
++			(timeoutRow->height() - timeoutLabel->height()) / 2,
++			width);
++		_proxyRotationTimeoutInput->resize(
++			st::proxySettingsNumberWidth,
++			_proxyRotationTimeoutInput->height());
++		_proxyRotationTimeoutInput->moveToRight(
++			st::proxySettingsUnitWidth,
++			0,
++			width);
++		timeoutSuffix->resizeToNaturalWidth(st::proxySettingsUnitWidth);
++		timeoutSuffix->moveToRight(
++			0,
++			(timeoutRow->height() - timeoutSuffix->height()) / 2,
++			width);
++	}, timeoutRow->lifetime());
+ 	_proxyRotationOptions->entity()->add(
+ 		object_ptr<Ui::FlatLabel>(
+ 			_proxyRotationOptions->entity(),
+-			tr::lng_proxy_auto_switch_about(tr::now),
++			u"Switches after the selected proxy remains disconnected for this long."_q,
+ 			st::boxDividerLabel),
+ 		st::proxyAboutPadding);
+ 
+@@ -1201,10 +1525,18 @@ void ProxiesBox::setupContent() {
+ 			inner,
+ 			object_ptr<Ui::FlatLabel>(
+ 				inner,
+-				tr::lng_proxy_about(tr::now),
++				u"Proxy servers"_q,
+ 				st::boxDividerLabel),
+ 			st::proxyAboutPadding),
+ 		style::margins(0, 0, 0, st::proxyRowPadding.top()));
++	_refreshChecksButton = Settings::AddButtonWithLabel(
++		inner,
++		rpl::single(u"Refresh checks"_q),
++		_checksCaption.value(),
++		st::settingsButtonNoIcon);
++	_refreshChecksButton->addClickHandler([=] {
++		_controller->refreshAllChecks();
++	});
+ 
+ 	_wrap = inner->add(std::move(_initialWrap));
+ 	inner->add(object_ptr<Ui::FixedHeightWidget>(
+@@ -1218,17 +1550,37 @@ void ProxiesBox::setupContent() {
+ 		}
  		refreshProxyForCalls();
  		refreshProxyRotation();
++		refreshCustomControls();
  	});
-+	_proxyCHelloSettings->setChangedCallback([=](ProxyData::CHelloType value) {
-+		if (!_controller->setProxyCHelloType(value)) {
-+			_proxyCHelloSettings->setValue(_settings.proxyCHelloType());
-+		}
-+	});
-+	// ++ proxy slow connect
+-	_tryIPv6->checkedChanges(
 +	_proxySlowMode->checkedChanges(
-+	) | rpl::on_next([=](bool checked) {
+ 	) | rpl::on_next([=](bool checked) {
+-		_controller->setTryIPv6(checked);
+-	}, _tryIPv6->lifetime());
 +		_controller->setProxySlowMode(checked);
++		_proxySlowSummary->setText(SlowModeSummary(_settings));
 +		refreshProxySlowMode();
 +	}, _proxySlowMode->lifetime());
 +	connect(_proxySlowDelayInput, &Ui::MaskedInputField::changed, [=] {
@@ -273,6 +773,7 @@ index 6d99e31..0ff6fd6 100644
 +		if(!_controller->setProxySlowDelay(value)) {
 +			_proxySlowDelayInput->setText(QString::number(_settings.proxySlowDelay()));
 +		}
++		_proxySlowSummary->setText(SlowModeSummary(_settings));
 +	});
 +
 +	connect(_proxySlowJitterInput, &Ui::MaskedInputField::changed, [=] {
@@ -280,43 +781,419 @@ index 6d99e31..0ff6fd6 100644
 +		if (!_controller->setProxySlowJitter(value)) {
 +			_proxySlowJitterInput->setText(QString::number(_settings.proxySlowJitter()));
 +		}
++		_proxySlowSummary->setText(SlowModeSummary(_settings));
 +	});
 +	refreshProxySlowMode();
-+	// -- proxy slow connect
-+
- 	_tryIPv6->checkedChanges(
- 	) | rpl::on_next([=](bool checked) {
- 		_controller->setTryIPv6(checked);
-@@ -1253,6 +1463,7 @@ void ProxiesBox::setupContent() {
+ 
+ 	_controller->proxySettingsValue(
+ 	) | rpl::on_next([=](ProxyData::Settings value) {
+ 		_proxySettings->setValue(value);
+ 		refreshProxyForCalls();
+ 		refreshProxyRotation();
++		refreshCustomControls();
+ 	}, inner->lifetime());
+ 
+ 	_proxyForCalls->entity()->checkedChanges(
+@@ -1240,19 +1592,37 @@ void ProxiesBox::setupContent() {
+ 		_controller->setProxyRotationEnabled(checked);
+ 		refreshProxyRotation();
+ 	}, _proxyRotation->lifetime());
+-	_proxyRotationTimeout->sectionActivated(
+-	) | rpl::on_next([=](int section) {
+-		_controller->setProxyRotationTimeout(
+-			Core::SettingsProxy::kProxyRotationTimeouts[section]);
+-	}, _proxyRotationTimeout->lifetime());
++	connect(
++		_proxyRotationTimeoutInput,
++		&Ui::MaskedInputField::changed,
++		[=] {
++			const auto value = _proxyRotationTimeoutInput->getLastText().toInt();
++			if (value <= 0) {
++				_proxyRotationTimeoutInput->setText(
++					QString::number(_settings.proxyRotationTimeout()));
++			} else {
++				_controller->setProxyRotationTimeout(value);
++			}
++		});
++	_controller->checksRunningValue(
++	) | rpl::on_next([=](bool running) {
++		_checksCaption = running ? u"Checking…"_q : u"Completed"_q;
++		refreshCustomControls();
++	}, inner->lifetime());
++	_controller->checksFinished(
++	) | rpl::on_next([=] {
++		rebuildRows();
++	}, inner->lifetime());
+ 
+ 	if (_rows.empty()) {
+ 		createNoRowsLabel();
+ 	}
+ 	refreshProxyForCalls();
  	refreshProxyRotation();
++	refreshCustomControls();
  	_proxyForCalls->finishAnimating();
  	_proxyRotation->finishAnimating();
 +	_proxySlowModeOptionsLayout->finishAnimating();
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1312,6 +1523,20 @@ void ProxiesBox::refreshProxyRotation() {
- 		anim::type::normal);
+@@ -1262,7 +1632,7 @@ void ProxiesBox::setupContent() {
+ 				object_ptr<Ui::VerticalLayout>(inner)));
+ 		const auto shareList = Settings::AddButtonWithIcon(
+ 			wrap->entity(),
+-			tr::lng_proxy_edit_share_list_button(),
++			rpl::single(u"Share proxy list"_q),
+ 			st::settingsButton,
+ 			{ &st::menuIconCopy });
+ 		_shareListButton = shareList;
+@@ -1273,7 +1643,7 @@ void ProxiesBox::setupContent() {
+ 		wrap->finishAnimating();
+ 	}
+ 
+-	inner->resizeToWidth(st::boxWideWidth);
++	inner->resizeToWidth(st::proxySettingsWidth);
+ 
+ 	inner->heightValue(
+ 	) | rpl::map([=](int height) {
+@@ -1284,7 +1654,7 @@ void ProxiesBox::setupContent() {
+ 			st::boxMaxListHeight);
+ 	}) | rpl::distinct_until_changed(
+ 	) | rpl::on_next([=](int height) {
+-		setDimensions(st::boxWideWidth, height);
++		setDimensions(st::proxySettingsWidth, height);
+ 	}, inner->lifetime());
  }
  
+@@ -1302,14 +1672,67 @@ void ProxiesBox::refreshProxyRotation() {
+ 	if (!_proxyRotation || !_proxyRotationOptions) {
+ 		return;
+ 	}
+-	const auto visible = (_proxySettings->current()
+-			== ProxyData::Settings::Enabled)
+-		&& _settings.selected()
++	const auto custom = (_proxySettings->current()
++		== ProxyData::Settings::Enabled);
++	const auto visible = _settings.selected()
+ 		&& (_settings.list().size() > 1);
+ 	_proxyRotation->toggle(visible, anim::type::normal);
++	_proxyRotation->entity()->setDisabled(!custom);
+ 	_proxyRotationOptions->toggle(
+ 		visible && _proxyRotation->entity()->checked(),
+ 		anim::type::normal);
++	_proxyRotationOptions->entity()->setDisabled(!custom);
++}
++
 +void ProxiesBox::refreshProxySlowMode() {
 +	if (!_proxySlowMode || !_proxySlowModeOptions || !_proxySlowModeOptionsLayout) {
 +		return;
 +	}
-+	_proxySlowModeOptionsLayout->toggle(_proxySlowMode->checked(), anim::type::normal);
-+	// _proxySlowModeOptions->setVisible(_proxySlowMode->checked());
++	_proxySlowModeOptionsLayout->toggle(true, anim::type::normal);
++	const auto active = _proxySlowMode->checked()
++		&& (_proxySettings->current() == ProxyData::Settings::Enabled)
++		&& _controller->selectedUsesFakeTls();
++	_proxySlowModeOptions->setDisabled(!active);
 +}
 +
 +void ProxiesBox::refreshProxyCHelloStatus() {
 +	if (_proxyCHelloStatus) {
-+		_proxyCHelloStatus->setText(ClientHelloStatusText());
++		_proxyCHelloStatus->setText(_controller->selectedUsesFakeTls()
++			? ClientHelloStatusText()
++			: u"Available for MTProto FakeTLS proxies"_q);
 +	}
 +}
 +
++void ProxiesBox::refreshCustomControls() {
++	const auto custom = (_proxySettings->current()
++		== ProxyData::Settings::Enabled);
++	const auto fakeTls = _controller->selectedUsesFakeTls();
++	if (_proxyAddressPriorityButton) {
++		_proxyAddressPriorityButton->setDisabled(
++			!custom || !_controller->selectedUsesHostname());
++	}
++	if (_proxyCHelloButton) {
++		_proxyCHelloButton->setDisabled(!custom || !fakeTls);
++	}
++	if (_proxyCHelloStatus) {
++		_proxyCHelloStatus->setDisabled(!custom || !fakeTls);
++	}
++	if (_proxySlowMode) {
++		_proxySlowMode->setDisabled(!custom || !fakeTls);
++	}
++	if (_proxySlowSummary) {
++		_proxySlowSummary->setDisabled(!custom || !fakeTls);
++	}
++	if (_refreshChecksButton) {
++		_refreshChecksButton->setDisabled(
++			!custom || _checksCaption.current() == u"Checking…"_q);
++	}
++	for (const auto &[id, row] : _rows) {
++		row->setSelectionEnabled(custom);
++	}
++	refreshProxySlowMode();
++	refreshProxyRotation();
++	refreshProxyCHelloStatus();
+ }
+ 
  int ProxiesBox::rowHeight() const {
- 	return st::proxyRowPadding.top()
+@@ -1317,6 +1740,8 @@ int ProxiesBox::rowHeight() const {
  		+ st::semiboldFont->height
-@@ -2301,6 +2526,52 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+ 		+ st::proxyRowSkip
+ 		+ st::normalFont->height
++		+ st::proxyRowSkip
++		+ st::normalFont->height
+ 		+ st::proxyRowPadding.bottom();
+ }
+ 
+@@ -1339,8 +1764,7 @@ void ProxiesBox::applyView(View &&view) {
+ 			? _wrap.data()
+ 			: _initialWrap.data();
+ 		const auto &[i, ok] = _rows.emplace(id, nullptr);
+-		i->second.reset(wrap->insert(
+-			0,
++		i->second.reset(wrap->add(
+ 			object_ptr<ProxyRow>(
+ 				wrap,
+ 				std::move(view))));
+@@ -1355,6 +1779,18 @@ void ProxiesBox::applyView(View &&view) {
+ 		i->second->updateFields(std::move(view));
+ 	}
+ 	refreshProxyRotation();
++	refreshCustomControls();
++}
++
++void ProxiesBox::rebuildRows() {
++	_rows.clear();
++	_noRows.reset();
++	for (auto view : _controller->snapshot()) {
++		applyView(std::move(view));
++	}
++	if (_rows.empty()) {
++		createNoRowsLabel();
++	}
+ }
+ 
+ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1800,13 @@ void ProxiesBox::createNoRowsLabel() {
+ 			rowHeight()),
+ 		st::proxyEmptyListPadding));
+ 	_noRows->resize(
+-		(st::boxWideWidth
++		(st::proxySettingsWidth
+ 			- st::proxyEmptyListPadding.left()
+ 			- st::proxyEmptyListPadding.right()),
+ 		_noRows->height());
+ 	const auto label = Ui::CreateChild<Ui::FlatLabel>(
+ 		_noRows.get(),
+-		tr::lng_proxy_description(tr::now),
++		u"Add a proxy server to use a custom connection."_q,
+ 		st::proxyEmptyListLabel);
+ 	_noRows->widthValue(
+ 	) | rpl::on_next([=](int width) {
+@@ -1404,7 +1840,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+ 
+ 	button->clicks(
+ 	) | rpl::on_next([=] {
+-		_controller->applyItem(id);
++		if (_proxySettings->current() == ProxyData::Settings::Enabled) {
++			_controller->applyItem(id);
++		}
+ 	}, button->lifetime());
+ }
+ 
+@@ -1714,9 +2152,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+ 		}
+ 	}, _lifetime);
+ 
+-	for (auto &item : _list) {
+-		refreshChecker(item);
+-	}
++	refreshAllChecks();
+ }
+ 
+ void ProxiesBoxController::ShowApplyConfirmation(
+@@ -2003,51 +2439,122 @@ auto ProxiesBoxController::proxySettingsValue() const
+ 	) | rpl::distinct_until_changed();
+ }
+ 
+-void ProxiesBoxController::refreshChecker(Item &item) {
++rpl::producer<bool> ProxiesBoxController::checksRunningValue() const {
++	return _checksRunning.value();
++}
++
++rpl::producer<> ProxiesBoxController::checksFinished() const {
++	return _checksFinished.events();
++}
++
++std::vector<ProxiesBoxController::ItemView> ProxiesBoxController::snapshot() const {
++	return ranges::views::all(
++		_list
++	) | ranges::views::transform([&](const Item &item) {
++		return viewForItem(item);
++	}) | ranges::to_vector;
++}
++
++bool ProxiesBoxController::selectedUsesFakeTls() const {
++	return UsesFakeTls(_settings.selected());
++}
++
++bool ProxiesBoxController::selectedUsesHostname() const {
++	return _settings.selected().tryCustomResolve();
++}
++
++void ProxiesBoxController::refreshChecker(Item &item, bool batch) {
++	auto finishCancelledBatch = false;
++	if (item.batchCheck) {
++		item.batchCheck = false;
++		if (_batchChecksLeft > 0) {
++			finishCancelledBatch = (--_batchChecksLeft == 0);
++		}
++	}
++	item.checker = nullptr;
+ 	item.state = ItemState::Checking;
++	item.ping = 0;
++	item.checkedAt = QString();
++	item.batchCheck = batch;
+ 	const auto id = item.id;
+-	MTP::StartProxyCheck(
++	item.checker = MTP::ScheduleProxyCheck(
+ 		&_account->mtp(),
+ 		item.data,
+ 		Core::App().settings().proxy().tryIPv6(),
+-		item.checker,
+-		item.checkerv6,
+-		[=](Connection *raw, int pingTime) {
+-			const auto item = ranges::find(
+-				_list,
+-				id,
+-				[](const Item &item) { return item.id; });
+-			if (item == end(_list)) {
+-				return;
+-			}
+-			MTP::DropProxyChecker(item->checker, item->checkerv6, raw);
+-			MTP::ResetProxyCheckers(item->checker, item->checkerv6);
+-			if (item->state == ItemState::Checking) {
+-				item->state = ItemState::Available;
+-				item->ping = pingTime;
+-				updateView(*item);
+-			}
++		[=](int pingTime) {
++			checkFinished(id, ItemState::Available, pingTime, batch);
+ 		},
+-		[=](Connection *raw) {
+-			const auto item = ranges::find(
+-				_list,
+-				id,
+-				[](const Item &item) { return item.id; });
+-			if (item == end(_list)) {
+-				return;
+-			}
+-			MTP::DropProxyChecker(item->checker, item->checkerv6, raw);
+-			if (!MTP::HasProxyCheckers(item->checker, item->checkerv6)
+-				&& item->state == ItemState::Checking) {
+-				item->state = ItemState::Unavailable;
+-				updateView(*item);
+-			}
++		[=] {
++			checkFinished(id, ItemState::Unavailable, 0, batch);
+ 		});
+-	if (!MTP::HasProxyCheckers(item.checker, item.checkerv6)) {
+-		item.state = ItemState::Unavailable;
++	updateView(item);
++	if (finishCancelledBatch) {
++		finishChecksBatch();
++	}
++}
++
++void ProxiesBoxController::checkFinished(
++		int id,
++		ItemState state,
++		int ping,
++		bool batch) {
++	const auto item = ranges::find(
++		_list,
++		id,
++		[](const Item &item) { return item.id; });
++	if (item == end(_list)
++		|| item->state != ItemState::Checking
++		|| item->batchCheck != batch) {
++		return;
++	}
++	item->checker = nullptr;
++	item->state = state;
++	item->ping = ping;
++	item->checkedAt = QTime::currentTime().toString(u"HH:mm:ss"_q);
++	item->batchCheck = false;
++	updateView(*item);
++	if (batch && _batchChecksLeft > 0 && --_batchChecksLeft == 0) {
++		finishChecksBatch();
++	}
++}
++
++void ProxiesBoxController::refreshAllChecks() {
++	if (_checksRunning.current()) {
++		return;
++	}
++	_batchChecksLeft = ranges::count(_list, false, &Item::deleted);
++	_checksRunning = (_batchChecksLeft > 0);
++	if (!_batchChecksLeft) {
++		finishChecksBatch();
++		return;
++	}
++	for (auto &item : _list) {
++		if (!item.deleted) {
++			refreshChecker(item, true);
++		}
+ 	}
+ }
+ 
++void ProxiesBoxController::finishChecksBatch() {
++	_batchChecksLeft = 0;
++	std::stable_sort(begin(_list), end(_list), [](const Item &a, const Item &b) {
++		if (a.deleted != b.deleted) {
++			return !a.deleted;
++		}
++		const auto aUnavailable = (a.state == ItemState::Unavailable);
++		const auto bUnavailable = (b.state == ItemState::Unavailable);
++		if (aUnavailable != bUnavailable) {
++			return !aUnavailable;
++		}
++		if (aUnavailable) {
++			return false;
++		}
++		return a.ping < b.ping;
++	});
++	_checksRunning = false;
++	_checksFinished.fire({});
++}
++
+ object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
+ 		not_null<Main::Account*> account,
+ 		const QString &highlightId) {
+@@ -2146,6 +2653,11 @@ void ProxiesBoxController::applyItem(int id) {
+ 
+ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+ 	auto item = findById(id);
++	const auto cancelledBatchCheck = deleted && item->batchCheck;
++	if (cancelledBatchCheck) {
++		item->batchCheck = false;
++		item->checker = nullptr;
++	}
+ 	item->deleted = deleted;
+ 
+ 	if (deleted) {
+@@ -2195,6 +2707,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+ 	}
+ 	saveDelayed();
+ 	updateView(*item);
++	if (cancelledBatchCheck
++		&& _batchChecksLeft > 0
++		&& --_batchChecksLeft == 0) {
++		finishChecksBatch();
++	}
+ }
+ 
+ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2301,6 +2818,52 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  	return true;
  }
  
@@ -369,11 +1246,91 @@ index 6d99e31..0ff6fd6 100644
  void ProxiesBoxController::setProxyForCalls(bool enabled) {
  	if (_settings.useProxyForCalls() == enabled) {
  		return;
+@@ -2359,15 +2922,38 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+ }
+ 
+ void ProxiesBoxController::updateView(const Item &item) {
++	_views.fire(viewForItem(item));
++}
++
++bool ProxiesBoxController::setProxyPreferIPv6(bool value) {
++	if (_settings.proxyPreferIPv6() == value) {
++		return true;
++	}
++	_settings.setProxyPreferIPv6(value);
++	MTP::ProxyData::setGlobalPreferIPv6(value);
++	for (auto &proxy : _settings.list()) {
++		proxy.resolvedIPs.clear();
++		proxy.resolvedExpireAt = 0;
++	}
++	auto selected = _settings.selected();
++	selected.resolvedIPs.clear();
++	selected.resolvedExpireAt = 0;
++	_settings.setSelected(selected);
++	_account->mtp().restart();
++	saveDelayed();
++	return true;
++}
++
++auto ProxiesBoxController::viewForItem(const Item &item) const -> ItemView {
+ 	const auto selected = (_settings.selected() == item.data);
+ 	const auto deleted = item.deleted;
+ 	const auto type = [&] {
+ 		switch (item.data.type) {
+ 		case Type::Http: return u"HTTP"_q;
+ 		case Type::Socks5: return u"SOCKS5"_q;
+-		case Type::Mtproto: return u"MTPROTO"_q;
++		case Type::Mtproto: return u"MTProto"_q;
+ 		}
+-		Unexpected("Proxy type in ProxiesBoxController::updateView.");
++		Unexpected("Proxy type in ProxiesBoxController::viewForItem.");
+ 	}();
+ 	const auto state = [&] {
+ 		if (!selected || !_settings.isEnabled()) {
+@@ -2379,18 +2965,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+ 	}();
+ 	const auto supportsShare = ProxyDataIsShareable(item.data);
+ 	const auto supportsCalls = item.data.supportsCalls();
+-	_views.fire({
++	return {
+ 		item.id,
+ 		type,
+ 		item.data.host,
+ 		item.data.port,
+ 		item.ping,
+-		!deleted && selected,
++		item.checkedAt,
++		!deleted && selected && _settings.isEnabled(),
+ 		deleted,
+ 		!deleted && supportsShare,
+ 		supportsCalls,
+ 		state,
+-	});
++	};
+ }
+ 
+ void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
-index 5de98bc..87bd5f3 100644
+index 5de98bc663..37dcc84355 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
-@@ -84,6 +84,10 @@ public:
+@@ -20,6 +20,7 @@ class InputField;
+ class PortInput;
+ class PasswordInput;
+ class Checkbox;
++class SettingsButton;
+ template <typename Enum>
+ class RadioenumGroup;
+ template <typename Enum>
+@@ -67,6 +68,7 @@ public:
+ 		QString host;
+ 		uint32 port = 0;
+ 		int ping = 0;
++		QString checkedAt;
+ 		bool selected = false;
+ 		bool deleted = false;
+ 		bool supportsShare = false;
+@@ -84,11 +86,22 @@ public:
  	object_ptr<Ui::BoxContent> editItemBox(int id);
  	object_ptr<Ui::BoxContent> addNewItemBox();
  	bool setProxySettings(ProxyData::Settings value);
@@ -381,11 +1338,64 @@ index 5de98bc..87bd5f3 100644
 +	bool setProxySlowMode(bool value);
 +	bool setProxySlowDelay(int value);
 +	bool setProxySlowJitter(int value);
++	bool setProxyPreferIPv6(bool value);
  	void setProxyForCalls(bool enabled);
  	void setProxyRotationEnabled(bool enabled);
  	void setProxyRotationTimeout(int value);
+ 	void setTryIPv6(bool enabled);
++	void refreshAllChecks();
+ 	rpl::producer<ProxyData::Settings> proxySettingsValue() const;
++	rpl::producer<bool> checksRunningValue() const;
++	rpl::producer<> checksFinished() const;
++	[[nodiscard]] std::vector<ItemView> snapshot() const;
++	[[nodiscard]] bool selectedUsesFakeTls() const;
++	[[nodiscard]] bool selectedUsesHostname() const;
+ 
+ 	[[nodiscard]] bool contains(const ProxyData &proxy) const;
+ 	void addNewItem(const ProxyData &proxy);
+@@ -100,15 +113,15 @@ public:
+ 	~ProxiesBoxController();
+ 
+ private:
+-	using Checker = MTP::details::ConnectionPointer;
+ 	struct Item {
+ 		int id = 0;
+ 		ProxyData data;
+ 		bool deleted = false;
+-		Checker checker;
+-		Checker checkerv6;
++		MTP::ProxyCheckHandlePointer checker;
+ 		ItemState state = ItemState::Checking;
+ 		int ping = 0;
++		QString checkedAt;
++		bool batchCheck = false;
+ 
+ 	};
+ 
+@@ -118,7 +131,10 @@ private:
+ 	void updateView(const Item &item);
+ 	void share(const ProxyData &proxy, bool qr = false);
+ 	void saveDelayed();
+-	void refreshChecker(Item &item);
++	void refreshChecker(Item &item, bool batch = false);
++	void checkFinished(int id, ItemState state, int ping, bool batch);
++	void finishChecksBatch();
++	[[nodiscard]] ItemView viewForItem(const Item &item) const;
+ 
+ 	void replaceItemWith(
+ 		std::vector<Item>::iterator which,
+@@ -134,6 +150,9 @@ private:
+ 	rpl::event_stream<ItemView> _views;
+ 	base::Timer _saveTimer;
+ 	rpl::event_stream<ProxyData::Settings> _proxySettingsChanges;
++	rpl::variable<bool> _checksRunning = false;
++	rpl::event_stream<> _checksFinished;
++	int _batchChecksLeft = 0;
+ 	std::shared_ptr<Ui::Show> _show;
+ 
+ 	ProxyData _lastSelectedProxy;
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b..f3748d7 100644
+index 495bb0b846..dd50d56834 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
 @@ -13,6 +13,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -422,7 +1432,16 @@ index 495bb0b..f3748d7 100644
  namespace {
  
  [[nodiscard]] qint32 ProxySettingsToInt(MTP::ProxyData::Settings settings) {
-@@ -145,6 +172,12 @@ QByteArray SettingsProxy::serialize() const {
+@@ -126,7 +153,7 @@ QByteArray SettingsProxy::serialize() const {
+ 			0,
+ 			ranges::plus(),
+ 			&Serialize::bytearraySize)
+-		+ (4 + int(_proxyRotationPreferredIndices.size())) * sizeof(qint32);
++		+ (9 + int(_proxyRotationPreferredIndices.size())) * sizeof(qint32);
+ 	auto stream = Serialize::ByteArrayWriter(size);
+ 	stream
+ 		<< qint32(_tryIPv6 ? 1 : 0)
+@@ -145,6 +172,13 @@ QByteArray SettingsProxy::serialize() const {
  	for (const auto index : _proxyRotationPreferredIndices) {
  		stream << qint32(index);
  	}
@@ -432,10 +1451,11 @@ index 495bb0b..f3748d7 100644
 +	stream << qint32(_proxySlowMode ? 1 : 0);
 +	stream << qint32(_proxySlowDelay);
 +	stream << qint32(_proxySlowJitter);
++	stream << qint32(_proxyPreferIPv6 ? 1 : 0);
  	return std::move(stream).result();
  }
  
-@@ -210,6 +243,22 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -210,6 +244,26 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  			}
  		}
  	}
@@ -455,10 +1475,14 @@ index 495bb0b..f3748d7 100644
 +	if (!stream.atEnd()) {
 +		stream >> proxySlowJitter;
 +	}
++	auto proxyPreferIPv6 = qint32(_proxyPreferIPv6 ? 1 : 0);
++	if (!stream.atEnd()) {
++		stream >> proxyPreferIPv6;
++	}
  
  	if (!stream.ok()) {
  		LOG(("App Error: "
-@@ -226,7 +275,16 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -226,7 +280,18 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  	_selected = DeserializeProxyData(selectedProxy);
  	_list = std::move(list);
  	setProxyRotationPreferredIndices(std::move(preferredIndices));
@@ -473,10 +1497,12 @@ index 495bb0b..f3748d7 100644
 +	MTP::ProxyData::setGlobalSlowMode(_proxySlowMode);
 +	MTP::ProxyData::setGlobalSlowDelay(_proxySlowDelay);
 +	MTP::ProxyData::setGlobalSlowJitter(_proxySlowJitter);
++	_proxyPreferIPv6 = (proxyPreferIPv6 == 1);
++	MTP::ProxyData::setGlobalPreferIPv6(_proxyPreferIPv6);
  	return true;
  }
  
-@@ -310,6 +368,38 @@ void SettingsProxy::setProxyRotationTimeout(int value) {
+@@ -310,6 +375,46 @@ void SettingsProxy::setProxyRotationTimeout(int value) {
  		: kDefaultProxyRotationTimeout;
  }
  
@@ -512,11 +1538,19 @@ index 495bb0b..f3748d7 100644
 +	_proxySlowJitter = value;
 +}
 +
++bool SettingsProxy::proxyPreferIPv6() const {
++	return _proxyPreferIPv6;
++}
++
++void SettingsProxy::setProxyPreferIPv6(bool value) {
++	_proxyPreferIPv6 = value;
++}
++
  MTP::ProxyData::Settings SettingsProxy::settings() const {
  	return _settings;
  }
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.h b/Telegram/SourceFiles/core/core_settings_proxy.h
-index 1f2ec5c..f165ef3 100644
+index 1f2ec5c516..d8e382a103 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.h
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.h
 @@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -529,7 +1563,7 @@ index 1f2ec5c..f165ef3 100644
  class SettingsProxy final {
  public:
  	static constexpr auto kProxyRotationTimeouts = std::array{
-@@ -46,6 +49,18 @@ public:
+@@ -46,6 +49,21 @@ public:
  	[[nodiscard]] int proxyRotationTimeout() const;
  	void setProxyRotationTimeout(int value);
  
@@ -545,10 +1579,13 @@ index 1f2ec5c..f165ef3 100644
 +	[[nodiscard]] int proxySlowJitter() const;
 +	void setProxySlowJitter(int value);
 +
++	[[nodiscard]] bool proxyPreferIPv6() const;
++	void setProxyPreferIPv6(bool value);
++
  	[[nodiscard]] MTP::ProxyData::Settings settings() const;
  	void setSettings(MTP::ProxyData::Settings value);
  
-@@ -80,6 +95,11 @@ private:
+@@ -80,6 +98,12 @@ private:
  	bool _checkIpWarningShown = false;
  	int _proxyRotationTimeout = kDefaultProxyRotationTimeout;
  	MTP::ProxyData::Settings _settings = MTP::ProxyData::Settings::System;
@@ -556,12 +1593,265 @@ index 1f2ec5c..f165ef3 100644
 +	bool _proxySlowMode = false;
 +	int _proxySlowDelay = 250;
 +	int _proxySlowJitter = 150;
++	bool _proxyPreferIPv6 = true;
 +
  	MTP::ProxyData _selected;
  	std::vector<MTP::ProxyData> _list;
  	std::vector<int> _proxyRotationPreferredIndices;
+diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
+index a643f0aee6..26fd5bdee8 100644
+--- a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
++++ b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
+@@ -19,8 +19,7 @@ namespace Core {
+ namespace {
+ 
+ constexpr auto kProxyRotationCheckInterval = 2 * crl::time(1000);
+-constexpr auto kProxyRotationCheckLifetime = 20 * crl::time(1000);
+-constexpr auto kProxyRotationMaxActiveChecks = 10;
++constexpr auto kProxyRotationRecheckInterval = 30 * crl::time(1000);
+ 
+ } // namespace
+ 
+@@ -199,33 +198,16 @@ void ProxyRotationManager::runChecks() {
+ 		stopChecking();
+ 		return;
+ 	}
+-	pruneExpiredChecks();
+ 	startNextCheck();
+ 	continueChecking(kProxyRotationCheckInterval);
+ }
+ 
+-void ProxyRotationManager::pruneExpiredChecks() {
+-	const auto now = crl::now();
+-	for (auto &entry : _entries) {
+-		if (!entry.checking
+-			|| (now - entry.startedAt < kProxyRotationCheckLifetime)) {
+-			continue;
+-		}
+-		MTP::ResetProxyCheckers(entry.v4, entry.v6);
+-		entry.checking = false;
+-		entry.startedAt = 0;
+-	}
+-}
+-
+ void ProxyRotationManager::startNextCheck() {
+ 	if (_probeOrder.empty()) {
+ 		return;
+ 	}
+-	if (ranges::count(_entries, true, &Entry::checking)
+-		>= kProxyRotationMaxActiveChecks) {
+-		return;
+-	}
+ 	const auto &settings = App().settings().proxy();
++	const auto now = crl::now();
+ 	auto attemptsLeft = int(_probeOrder.size());
+ 	while (attemptsLeft-- > 0) {
+ 		if (_nextCheckIndex >= int(_probeOrder.size())) {
+@@ -237,24 +219,22 @@ void ProxyRotationManager::startNextCheck() {
+ 		}
+ 		const auto &proxy = settings.list()[listIndex];
+ 		auto &entry = ensure(proxy);
+-		if (entry.checking) {
++		if (entry.checking
++			|| (entry.checkedAt
++				&& (now - entry.checkedAt < kProxyRotationRecheckInterval))) {
+ 			continue;
+ 		}
+ 		entry.checking = true;
+-		entry.startedAt = crl::now();
+-		MTP::StartProxyCheck(
++		entry.check = MTP::ScheduleProxyCheck(
+ 			&accountForChecks()->mtp(),
+ 			proxy,
+ 			settings.tryIPv6(),
+-			entry.v4,
+-			entry.v6,
+-			[=](MTP::details::AbstractConnection *raw, int ping) {
+-				checkDone(proxy, raw, ping);
++			[=](int ping) {
++				checkDone(proxy, ping);
+ 			},
+-			[=](MTP::details::AbstractConnection *raw) {
+-				checkFailed(proxy, raw);
++			[=] {
++				checkFailed(proxy);
+ 			});
+-		break;
+ 	}
+ }
+ 
+@@ -267,27 +247,23 @@ void ProxyRotationManager::switchTimerDone() {
+ 
+ void ProxyRotationManager::clearPendingChecks() {
+ 	for (auto &entry : _entries) {
+-		MTP::ResetProxyCheckers(entry.v4, entry.v6);
++		entry.check = nullptr;
+ 		entry.checking = false;
+-		entry.startedAt = 0;
+ 	}
+ }
+ 
+ void ProxyRotationManager::checkDone(
+ 		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw,
+ 		int ping) {
+ 	const auto entry = find(proxy);
+-	if (!entry
+-		|| !entry->checking
+-		|| ((entry->v4.get() != raw) && (entry->v6.get() != raw))) {
++	if (!entry || !entry->checking) {
+ 		return;
+ 	}
+-	MTP::DropProxyChecker(entry->v4, entry->v6, raw);
+-	MTP::ResetProxyCheckers(entry->v4, entry->v6);
++	entry->check = nullptr;
+ 	entry->checking = false;
+-	entry->startedAt = 0;
++	entry->checkedAt = crl::now();
+ 	entry->availableAt = crl::now();
++	entry->ping = ping;
+ 	const auto proxySettings = &App().settings().proxy();
+ 	if (const auto index = proxySettings->indexInList(proxy); index >= 0) {
+ 		if (proxySettings->promoteProxyRotationPreferredIndex(index)) {
+@@ -301,20 +277,19 @@ void ProxyRotationManager::checkDone(
+ }
+ 
+ void ProxyRotationManager::checkFailed(
+-		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw) {
++		const MTP::ProxyData &proxy) {
+ 	const auto entry = find(proxy);
+-	if (!entry
+-		|| !entry->checking
+-		|| ((entry->v4.get() != raw) && (entry->v6.get() != raw))) {
+-		return;
+-	}
+-	MTP::DropProxyChecker(entry->v4, entry->v6, raw);
+-	if (MTP::HasProxyCheckers(entry->v4, entry->v6)) {
++	if (!entry || !entry->checking) {
+ 		return;
+ 	}
++	entry->check = nullptr;
+ 	entry->checking = false;
+-	entry->startedAt = 0;
++	entry->checkedAt = crl::now();
++	entry->availableAt = 0;
++	entry->ping = 0;
++	if (_waitingToSwitch && shouldSwitchToAvailable()) {
++		_waitingToSwitch = !switchToAvailable();
++	}
+ }
+ 
+ bool ProxyRotationManager::switchToAvailable() {
+@@ -322,6 +297,17 @@ bool ProxyRotationManager::switchToAvailable() {
+ 		return false;
+ 	}
+ 	const auto &settings = App().settings().proxy();
++	for (const auto index : _probeOrder) {
++		if (index < 0 || index >= int(settings.list().size())) {
++			continue;
++		}
++		if (const auto entry = find(settings.list()[index]);
++			entry && entry->checking) {
++			return false;
++		}
++	}
++	auto bestIndex = -1;
++	auto bestPing = 0;
+ 	for (const auto index : _probeOrder) {
+ 		if (index < 0 || index >= int(settings.list().size())) {
+ 			continue;
+@@ -334,12 +320,20 @@ bool ProxyRotationManager::switchToAvailable() {
+ 		if (entry->availableAt < _switchStartedAt) {
+ 			continue;
+ 		}
+-		_waitingToSwitch = false;
+-		App().setCurrentProxy(proxy, MTP::ProxyData::Settings::Enabled);
+-		App().saveSettingsDelayed();
+-		return true;
++		if (bestIndex < 0 || entry->ping < bestPing) {
++			bestIndex = index;
++			bestPing = entry->ping;
++		}
+ 	}
+-	return false;
++	if (bestIndex < 0) {
++		return false;
++	}
++	_waitingToSwitch = false;
++	App().setCurrentProxy(
++		settings.list()[bestIndex],
++		MTP::ProxyData::Settings::Enabled);
++	App().saveSettingsDelayed();
++	return true;
+ }
+ 
+ bool ProxyRotationManager::shouldSwitchToAvailable() const {
+diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.h b/Telegram/SourceFiles/core/proxy_rotation_manager.h
+index c1fee27696..89fc0a6a6c 100644
+--- a/Telegram/SourceFiles/core/proxy_rotation_manager.h
++++ b/Telegram/SourceFiles/core/proxy_rotation_manager.h
+@@ -31,11 +31,11 @@ public:
+ private:
+ 	struct Entry {
+ 		MTP::ProxyData proxy;
+-		MTP::ProxyCheckConnection v4;
+-		MTP::ProxyCheckConnection v6;
++		MTP::ProxyCheckHandlePointer check;
+ 		bool checking = false;
+-		crl::time startedAt = 0;
++		crl::time checkedAt = 0;
+ 		crl::time availableAt = 0;
++		int ping = 0;
+ 	};
+ 
+ 	[[nodiscard]] bool shouldObserve() const;
+@@ -51,17 +51,13 @@ private:
+ 	void updateProbeOrder();
+ 	void continueChecking(crl::time delay);
+ 	void runChecks();
+-	void pruneExpiredChecks();
+ 	void startNextCheck();
+ 	void switchTimerDone();
+ 	void clearPendingChecks();
+ 	void checkDone(
+ 		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw,
+ 		int ping);
+-	void checkFailed(
+-		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw);
++	void checkFailed(const MTP::ProxyData &proxy);
+ 	[[nodiscard]] bool switchToAvailable();
+ 	[[nodiscard]] bool shouldSwitchToAvailable() const;
+ 
+diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+index 571e14eb38..210f20adeb 100644
+--- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include "mtproto/mtp_instance.h"
+ 
++#include <algorithm>
++
+ namespace MTP {
+ namespace details {
+ namespace {
+@@ -93,8 +95,10 @@ void ResolvingConnection::domainResolved(
+ 	}
+ 	_proxy.resolvedExpireAt = expireAt;
+ 
++	auto ordered = ips;
++	std::stable_sort(begin(ordered), end(ordered), ProxyData::addressComesFirst);
+ 	auto index = 0;
+-	for (const auto &ip : ips) {
++	for (const auto &ip : ordered) {
+ 		if (index >= _proxy.resolvedIPs.size()) {
+ 			_proxy.resolvedIPs.push_back(ip);
+ 		} else if (_proxy.resolvedIPs[index] != ip) {
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a..af5fed6 100644
+index 448190a556..10df580463 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 @@ -8,20 +8,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -603,7 +1893,7 @@ index 448190a..af5fed6 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -231,6 +239,910 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +239,912 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -1450,7 +2740,9 @@ index 448190a..af5fed6 100644
 +		auto status = MTP::ProxyData::CHelloStatus();
 +		status.configured = configured_ch_type;
 +		status.actual = actual_ch_type;
-+		status.endpoint = QString("%1:%2").arg(address).arg(port);
++		status.endpoint = address.contains(':')
++			? u"[%1]:%2"_q.arg(address).arg(port)
++			: u"%1:%2"_q.arg(address).arg(port);
 +		status.random = (configured_ch_type == ProxyData::CHelloType::RANDOM);
 +		status.chromium150 = (actual_ch_type == ProxyData::CHelloType::Chromium150);
 +		status.resumed = resumed;
@@ -1514,7 +2806,7 @@ index 448190a..af5fed6 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -653,7 +1565,7 @@ void TlsSocket::plainConnected() {
+@@ -653,7 +1567,7 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -1523,7 +2815,7 @@ index 448190a..af5fed6 100644
  	const auto hello = PrepareClientHello(
  		kClientHelloRules,
  		domainFromSecret(),
-@@ -854,6 +1766,47 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -854,6 +1768,47 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -1572,7 +2864,7 @@ index 448190a..af5fed6 100644
  }
  
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index d4a9008..da3934d 100644
+index d4a90083ea..da3934d748 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 @@ -57,6 +57,8 @@ private:
@@ -1584,8 +2876,23 @@ index d4a9008..da3934d 100644
  	State _state = State::NotConnected;
  	QByteArray _incoming;
  	int _incomingGoodDataOffset = 0;
+diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+index a7dd178b71..b01216fa4a 100644
+--- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
++++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+@@ -409,6 +409,10 @@ void Instance::Private::applyDomainIps(
+ 		}
+ 		proxy.resolvedExpireAt = expireAt;
+ 		auto copy = ips;
++		std::stable_sort(
++			begin(copy),
++			end(copy),
++			ProxyData::addressComesFirst);
+ 		auto &current = proxy.resolvedIPs;
+ 		const auto i = ranges::remove_if(current, [&](const QString &ip) {
+ 			const auto index = copy.indexOf(ip);
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c54..a01d8fd 100644
+index f1f2c5402f..b5d0b76d40 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 @@ -10,9 +10,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1603,7 +2910,16 @@ index f1f2c54..a01d8fd 100644
  [[nodiscard]] bool IsHexMtprotoPassword(const QString &password) {
  	const auto size = password.size();
  	if (size < 32 || size % 2 == 1) {
-@@ -245,4 +250,52 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
+@@ -166,7 +171,7 @@ bool ProxyData::tryCustomResolve() const {
+ 	static const auto RegExp = QRegularExpression(
+ 		QStringLiteral("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
+ 	);
+-	return (type == Type::Socks5 || type == Type::Mtproto)
++	return (type == Type::Socks5 || type == Type::Http || type == Type::Mtproto)
+ 		&& !qthelp::is_ipv6(host)
+ 		&& !RegExp.match(host).hasMatch();
+ }
+@@ -245,4 +250,71 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
  		proxy.password);
  }
  
@@ -1612,6 +2928,7 @@ index f1f2c54..a01d8fd 100644
 +bool ProxyData::global_slow_mode   = false;
 +int  ProxyData::global_slow_delay  = 250;
 +int  ProxyData::global_slow_jitter = 150;
++bool ProxyData::global_prefer_ipv6 = true;
 +
 +void ProxyData::setGlobalClienHelloRulesType(const ProxyData::CHelloType value) {
 +	global_ch_type = value;
@@ -1655,9 +2972,27 @@ index f1f2c54..a01d8fd 100644
 +	return global_slow_jitter;
 +}
 +
++void ProxyData::setGlobalPreferIPv6(bool value) {
++	global_prefer_ipv6 = value;
++}
++
++bool ProxyData::globalPreferIPv6() {
++	return global_prefer_ipv6;
++}
++
++bool ProxyData::addressComesFirst(
++		const QString &first,
++		const QString &second) {
++	const auto firstV6 = qthelp::is_ipv6(first);
++	const auto secondV6 = qthelp::is_ipv6(second);
++	return (firstV6 == secondV6)
++		? false
++		: (firstV6 == global_prefer_ipv6);
++}
++
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f..c713b6c 100644
+index 367ee3f523..08f6d3c4ce 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -29,6 +29,27 @@ struct ProxyData {
@@ -1688,7 +3023,7 @@ index 367ee3f..c713b6c 100644
  
  	Type type = Type::None;
  	QString host;
-@@ -51,6 +72,27 @@ struct ProxyData {
+@@ -51,6 +72,34 @@ struct ProxyData {
  	[[nodiscard]] static Status MtprotoPasswordStatus(
  		const QString &password);
  
@@ -1707,12 +3042,291 @@ index 367ee3f..c713b6c 100644
 +	static void setGlobalSlowJitter(int value);
 +	[[nodiscard]] static int globalSlowJitter();
 +
++	static void setGlobalPreferIPv6(bool value);
++	[[nodiscard]] static bool globalPreferIPv6();
++	[[nodiscard]] static bool addressComesFirst(
++		const QString &first,
++		const QString &second);
++
 +private:
 +	static ProxyData::CHelloType global_ch_type;
 +	static ProxyData::CHelloStatus global_ch_status;
 +	static bool global_slow_mode;
 +	static int global_slow_delay;
 +	static int global_slow_jitter;
++	static bool global_prefer_ipv6;
  };
  
  [[nodiscard]] ProxyData ToDirectIpProxy(
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+index 831c8453cf..06b7a32455 100644
+--- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
++++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+@@ -7,13 +7,216 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "mtproto/proxy_check.h"
+ 
++#include "base/timer.h"
+ #include "mtproto/facade.h"
+ #include "mtproto/mtproto_dc_options.h"
+ 
++#include <algorithm>
++#include <optional>
++
+ namespace MTP {
+ 
+ using Connection = details::AbstractConnection;
+ 
++class ProxyCheckHandle final {
++public:
++	ProxyCheckHandle(Fn<void(int)> done, Fn<void()> fail)
++	: done(std::move(done))
++	, fail(std::move(fail)) {
++	}
++
++	Fn<void(int)> done;
++	Fn<void()> fail;
++};
++
++namespace {
++
++constexpr auto kMaxConcurrentProxyChecks = 2;
++constexpr auto kProxyCheckLifetime = 20 * crl::time(1000);
++constexpr auto kProxyCheckTimerInterval = crl::time(1000);
++
++class ProxyCheckCoordinator final {
++public:
++	ProxyCheckCoordinator() : _timer([=] { pruneExpired(); }) {
++	}
++
++	ProxyCheckHandlePointer schedule(
++			not_null<Instance*> mtproto,
++			const ProxyData &proxy,
++			bool tryIPv6,
++			Fn<void(int)> done,
++			Fn<void()> fail) {
++		auto handle = std::make_shared<ProxyCheckHandle>(
++			std::move(done),
++			std::move(fail));
++		for (const auto &entry : _entries) {
++			if (entry->mtproto == mtproto.get()
++				&& entry->proxy == proxy
++				&& entry->tryIPv6 == tryIPv6) {
++				entry->listeners.push_back(handle);
++				return handle;
++			}
++		}
++		auto entry = std::make_unique<Entry>();
++		entry->id = ++_idCounter;
++		entry->mtproto = mtproto.get();
++		entry->proxy = proxy;
++		entry->tryIPv6 = tryIPv6;
++		entry->listeners.push_back(handle);
++		_entries.push_back(std::move(entry));
++		startQueued();
++		return handle;
++	}
++
++private:
++	struct Entry {
++		uint64 id = 0;
++		Instance *mtproto = nullptr;
++		ProxyData proxy;
++		bool tryIPv6 = false;
++		bool active = false;
++		bool finished = false;
++		crl::time startedAt = 0;
++		ProxyCheckConnection v4;
++		ProxyCheckConnection v6;
++		std::vector<std::weak_ptr<ProxyCheckHandle>> listeners;
++	};
++
++	[[nodiscard]] Entry *find(uint64 id) {
++		const auto i = ranges::find(
++			_entries,
++			id,
++			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
++		return (i == end(_entries)) ? nullptr : i->get();
++	}
++
++	void startQueued() {
++		while (_activeCount < kMaxConcurrentProxyChecks) {
++			const auto i = ranges::find(
++				_entries,
++				false,
++				[](const std::unique_ptr<Entry> &entry) {
++					return entry->active;
++				});
++			if (i == end(_entries)) {
++				break;
++			}
++			auto &entry = **i;
++			entry.listeners.erase(
++				std::remove_if(
++					begin(entry.listeners),
++					end(entry.listeners),
++					[](const auto &listener) { return listener.expired(); }),
++				end(entry.listeners));
++			if (entry.listeners.empty()) {
++				_entries.erase(i);
++				continue;
++			}
++			entry.active = true;
++			entry.startedAt = crl::now();
++			++_activeCount;
++			const auto id = entry.id;
++			StartProxyCheck(
++				not_null<Instance*>(entry.mtproto),
++				entry.proxy,
++				entry.tryIPv6,
++				entry.v4,
++				entry.v6,
++				[=](Connection *raw, int ping) {
++					checkDone(id, raw, ping);
++				},
++				[=](Connection *raw) {
++					checkFailed(id, raw);
++				});
++			if (!HasProxyCheckers(entry.v4, entry.v6)) {
++				finish(id, std::nullopt);
++			}
++		}
++		armTimer();
++	}
++
++	void armTimer() {
++		if (_activeCount > 0 && !_timer.isActive()) {
++			_timer.callOnce(kProxyCheckTimerInterval);
++		}
++	}
++
++	void pruneExpired() {
++		const auto now = crl::now();
++		auto expired = std::vector<uint64>();
++		for (const auto &entry : _entries) {
++			if (entry->active
++				&& (now - entry->startedAt >= kProxyCheckLifetime)) {
++				expired.push_back(entry->id);
++			}
++		}
++		for (const auto id : expired) {
++			finish(id, std::nullopt);
++		}
++		armTimer();
++	}
++
++	void checkDone(uint64 id, not_null<Connection*> raw, int ping) {
++		const auto entry = find(id);
++		if (!entry || entry->finished) {
++			return;
++		}
++		DropProxyChecker(entry->v4, entry->v6, raw);
++		finish(id, ping);
++	}
++
++	void checkFailed(uint64 id, not_null<Connection*> raw) {
++		const auto entry = find(id);
++		if (!entry || entry->finished) {
++			return;
++		}
++		DropProxyChecker(entry->v4, entry->v6, raw);
++		if (!HasProxyCheckers(entry->v4, entry->v6)) {
++			finish(id, std::nullopt);
++		}
++	}
++
++	void finish(uint64 id, std::optional<int> ping) {
++		const auto entry = find(id);
++		if (!entry || entry->finished) {
++			return;
++		}
++		entry->finished = true;
++		ResetProxyCheckers(entry->v4, entry->v6);
++		auto listeners = std::move(entry->listeners);
++		const auto i = ranges::find(
++			_entries,
++			id,
++			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
++		_entries.erase(i);
++		--_activeCount;
++		for (const auto &weak : listeners) {
++			if (const auto strong = weak.lock()) {
++				if (ping) {
++					if (strong->done) {
++						strong->done(*ping);
++					}
++				} else if (strong->fail) {
++					strong->fail();
++				}
++			}
++		}
++		startQueued();
++	}
++
++	uint64 _idCounter = 0;
++	int _activeCount = 0;
++	std::vector<std::unique_ptr<Entry>> _entries;
++	base::Timer _timer;
++};
++
++[[nodiscard]] ProxyCheckCoordinator &Coordinator() {
++	static const auto result = new ProxyCheckCoordinator();
++	return *result;
++}
++
++} // namespace
++
+ void ResetProxyCheckers(
+ 		ProxyCheckConnection &v4,
+ 		ProxyCheckConnection &v6) {
+@@ -108,4 +311,18 @@ void StartProxyCheck(
+ 	tryConnect(v6, Variants::IPv6);
+ }
+ 
++ProxyCheckHandlePointer ScheduleProxyCheck(
++		not_null<Instance*> mtproto,
++		const ProxyData &proxy,
++		bool tryIPv6,
++		Fn<void(int ping)> done,
++		Fn<void()> fail) {
++	return Coordinator().schedule(
++		mtproto,
++		proxy,
++		tryIPv6,
++		std::move(done),
++		std::move(fail));
++}
++
+ } // namespace MTP
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.h b/Telegram/SourceFiles/mtproto/proxy_check.h
+index 1cbfb15fd2..3f17aa8779 100644
+--- a/Telegram/SourceFiles/mtproto/proxy_check.h
++++ b/Telegram/SourceFiles/mtproto/proxy_check.h
+@@ -9,10 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include "mtproto/connection_abstract.h"
+ 
++#include <memory>
++
+ namespace MTP {
+ 
+ using ProxyCheckConnection = details::ConnectionPointer;
+ 
++class ProxyCheckHandle;
++using ProxyCheckHandlePointer = std::shared_ptr<ProxyCheckHandle>;
++
+ void ResetProxyCheckers(
+ 	ProxyCheckConnection &v4,
+ 	ProxyCheckConnection &v6);
+@@ -32,4 +37,11 @@ void StartProxyCheck(
+ 	Fn<void(details::AbstractConnection *raw, int ping)> done,
+ 	Fn<void(details::AbstractConnection *raw)> fail);
+ 
++[[nodiscard]] ProxyCheckHandlePointer ScheduleProxyCheck(
++	not_null<Instance*> mtproto,
++	const ProxyData &proxy,
++	bool tryIPv6,
++	Fn<void(int ping)> done,
++	Fn<void()> fail);
++
+ } // namespace MTP
