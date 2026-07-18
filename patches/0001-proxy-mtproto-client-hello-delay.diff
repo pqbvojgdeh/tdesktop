@@ -1,5 +1,5 @@
 diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
-index 940d8a09e..c962aeaf0 100644
+index 940d8a09ee..c962aeaf04 100644
 --- a/Telegram/Resources/langs/lang.strings
 +++ b/Telegram/Resources/langs/lang.strings
 @@ -1268,6 +1268,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -22,17 +22,20 @@ index 940d8a09e..c962aeaf0 100644
  "lng_proxy_auto_switch_about" = "You can choose how quickly the app should auto-connect to the nearest active proxy if the current one stops working.";
  "lng_proxy_auto_switch_timeout#one" = "{count} s";
 diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
-index 3e51338c1..3aec78458 100644
+index 3e51338c13..a3f1c5fbc1 100644
 --- a/Telegram/SourceFiles/boxes/boxes.style
 +++ b/Telegram/SourceFiles/boxes/boxes.style
-@@ -697,10 +697,18 @@ groupStickersField: InputField(defaultMultiSelectSearchField) {
+@@ -697,10 +697,21 @@ groupStickersField: InputField(defaultMultiSelectSearchField) {
  groupStickersSubTitleHeight: 48px;
  
  proxyUsePadding: margins(22px, 6px, 22px, 5px);
 +proxySettingsWidth: 540px;
 +proxySettingsControlLabelWidth: 160px;
 +proxySettingsNumberWidth: 90px;
-+proxySettingsUnitWidth: 28px;
++proxySettingsUnitWidth: 24px;
++proxySettingsNumberInput: InputField(connectionPortInputField) {
++	textMargins: margins(0px, 17px, 0px, 4px);
++}
  proxyTryIPv6Padding: margins(22px, 8px, 22px, 5px);
  proxyRowPadding: margins(22px, 8px, 8px, 8px);
 +proxyRowSelectedPadding: margins(6px, 2px, 6px, 2px);
@@ -45,7 +48,7 @@ index 3e51338c1..3aec78458 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da..05f7b63fd 100644
+index 6d99e31da3..69f6c2333a 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -59,30 +59,83 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -463,7 +466,7 @@ index 6d99e31da..05f7b63fd 100644
  	_proxySettings
  		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
  			_settings.settings());
-@@ -1121,90 +1251,253 @@ void ProxiesBox::setupContent() {
+@@ -1121,90 +1251,254 @@ void ProxiesBox::setupContent() {
  			inner,
  			_proxySettings,
  			ProxyData::Settings::Disabled,
@@ -627,7 +630,7 @@ index 6d99e31da..05f7b63fd 100644
 +				st::defaultFlatLabel);
 +			const auto input = Ui::CreateChild<Ui::NumberInput>(
 +				row,
-+				st::connectionPortInputField,
++				st::proxySettingsNumberInput,
 +				rpl::single(QString()),
 +				value,
 +				maximum);
@@ -676,6 +679,8 @@ index 6d99e31da..05f7b63fd 100644
 +			inner,
 +			std::move(callsButton)),
 +		style::margins(0, 0, 0, st::proxyTryIPv6Padding.top()));
++
++	_about = addSectionTitle(u"Proxy servers"_q);
 +	auto rotationButton = object_ptr<Ui::SettingsButton>(
 +		inner,
 +		rpl::single(u"Auto-switch proxies"_q),
@@ -714,7 +719,7 @@ index 6d99e31da..05f7b63fd 100644
 +		st::defaultFlatLabel);
 +	_proxyRotationTimeoutInput = Ui::CreateChild<Ui::NumberInput>(
 +		timeoutRow,
-+		st::connectionPortInputField,
++		st::proxySettingsNumberInput,
 +		rpl::single(QString()),
 +		QString::number(_settings.proxyRotationTimeout()),
 +		9999);
@@ -758,7 +763,6 @@ index 6d99e31da..05f7b63fd 100644
 -				st::boxDividerLabel),
 -			st::proxyAboutPadding),
 -		style::margins(0, 0, 0, st::proxyRowPadding.top()));
-+	_about = addSectionTitle(u"Proxy servers"_q);
 +	_refreshChecksButton = Settings::AddButtonWithLabel(
 +		inner,
 +		rpl::single(u"Refresh checks"_q),
@@ -772,7 +776,7 @@ index 6d99e31da..05f7b63fd 100644
  
  	_wrap = inner->add(std::move(_initialWrap));
  	inner->add(object_ptr<Ui::FixedHeightWidget>(
-@@ -1218,41 +1511,104 @@ void ProxiesBox::setupContent() {
+@@ -1218,41 +1512,104 @@ void ProxiesBox::setupContent() {
  		}
  		refreshProxyForCalls();
  		refreshProxyRotation();
@@ -888,7 +892,7 @@ index 6d99e31da..05f7b63fd 100644
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1262,7 +1618,7 @@ void ProxiesBox::setupContent() {
+@@ -1262,7 +1619,7 @@ void ProxiesBox::setupContent() {
  				object_ptr<Ui::VerticalLayout>(inner)));
  		const auto shareList = Settings::AddButtonWithIcon(
  			wrap->entity(),
@@ -897,7 +901,7 @@ index 6d99e31da..05f7b63fd 100644
  			st::settingsButton,
  			{ &st::menuIconCopy });
  		_shareListButton = shareList;
-@@ -1273,7 +1629,7 @@ void ProxiesBox::setupContent() {
+@@ -1273,7 +1630,7 @@ void ProxiesBox::setupContent() {
  		wrap->finishAnimating();
  	}
  
@@ -906,7 +910,7 @@ index 6d99e31da..05f7b63fd 100644
  
  	inner->heightValue(
  	) | rpl::map([=](int height) {
-@@ -1284,7 +1640,7 @@ void ProxiesBox::setupContent() {
+@@ -1284,7 +1641,7 @@ void ProxiesBox::setupContent() {
  			st::boxMaxListHeight);
  	}) | rpl::distinct_until_changed(
  	) | rpl::on_next([=](int height) {
@@ -915,7 +919,7 @@ index 6d99e31da..05f7b63fd 100644
  	}, inner->lifetime());
  }
  
-@@ -1302,14 +1658,100 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1302,14 +1659,100 @@ void ProxiesBox::refreshProxyRotation() {
  	if (!_proxyRotation || !_proxyRotationOptions) {
  		return;
  	}
@@ -1020,7 +1024,7 @@ index 6d99e31da..05f7b63fd 100644
  }
  
  int ProxiesBox::rowHeight() const {
-@@ -1317,6 +1759,8 @@ int ProxiesBox::rowHeight() const {
+@@ -1317,6 +1760,8 @@ int ProxiesBox::rowHeight() const {
  		+ st::semiboldFont->height
  		+ st::proxyRowSkip
  		+ st::normalFont->height
@@ -1029,7 +1033,7 @@ index 6d99e31da..05f7b63fd 100644
  		+ st::proxyRowPadding.bottom();
  }
  
-@@ -1339,8 +1783,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1339,8 +1784,7 @@ void ProxiesBox::applyView(View &&view) {
  			? _wrap.data()
  			: _initialWrap.data();
  		const auto &[i, ok] = _rows.emplace(id, nullptr);
@@ -1039,7 +1043,7 @@ index 6d99e31da..05f7b63fd 100644
  			object_ptr<ProxyRow>(
  				wrap,
  				std::move(view))));
-@@ -1355,6 +1798,18 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1355,6 +1799,18 @@ void ProxiesBox::applyView(View &&view) {
  		i->second->updateFields(std::move(view));
  	}
  	refreshProxyRotation();
@@ -1058,7 +1062,7 @@ index 6d99e31da..05f7b63fd 100644
  }
  
  void ProxiesBox::createNoRowsLabel() {
-@@ -1364,13 +1819,13 @@ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1820,13 @@ void ProxiesBox::createNoRowsLabel() {
  			rowHeight()),
  		st::proxyEmptyListPadding));
  	_noRows->resize(
@@ -1074,7 +1078,7 @@ index 6d99e31da..05f7b63fd 100644
  		st::proxyEmptyListLabel);
  	_noRows->widthValue(
  	) | rpl::on_next([=](int width) {
-@@ -1404,7 +1859,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+@@ -1404,7 +1860,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
  
  	button->clicks(
  	) | rpl::on_next([=] {
@@ -1085,7 +1089,7 @@ index 6d99e31da..05f7b63fd 100644
  	}, button->lifetime());
  }
  
-@@ -1714,9 +2171,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1714,9 +2172,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  		}
  	}, _lifetime);
  
@@ -1096,7 +1100,7 @@ index 6d99e31da..05f7b63fd 100644
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
-@@ -2003,49 +2458,147 @@ auto ProxiesBoxController::proxySettingsValue() const
+@@ -2003,49 +2459,147 @@ auto ProxiesBoxController::proxySettingsValue() const
  	) | rpl::distinct_until_changed();
  }
  
@@ -1279,7 +1283,7 @@ index 6d99e31da..05f7b63fd 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
-@@ -2146,6 +2699,11 @@ void ProxiesBoxController::applyItem(int id) {
+@@ -2146,6 +2700,11 @@ void ProxiesBoxController::applyItem(int id) {
  
  void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	auto item = findById(id);
@@ -1291,7 +1295,7 @@ index 6d99e31da..05f7b63fd 100644
  	item->deleted = deleted;
  
  	if (deleted) {
-@@ -2195,6 +2753,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+@@ -2195,6 +2754,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	}
  	saveDelayed();
  	updateView(*item);
@@ -1303,7 +1307,7 @@ index 6d99e31da..05f7b63fd 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
-@@ -2217,16 +2780,18 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2217,16 +2781,18 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
  void ProxiesBoxController::replaceItemWith(
  		std::vector<Item>::iterator which,
  		std::vector<Item>::iterator with) {
@@ -1325,7 +1329,7 @@ index 6d99e31da..05f7b63fd 100644
  	saveDelayed();
  }
  
-@@ -2297,11 +2862,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+@@ -2297,11 +2863,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  		}
  	}
  	Core::App().setCurrentProxy(_settings.selected(), value);
@@ -1406,7 +1410,7 @@ index 6d99e31da..05f7b63fd 100644
  	if (_settings.useProxyForCalls() == enabled) {
  		return;
  	}
-@@ -2313,6 +2947,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
+@@ -2313,6 +2948,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
@@ -1416,7 +1420,7 @@ index 6d99e31da..05f7b63fd 100644
  	if (_settings.proxyRotationEnabled() == enabled) {
  		return;
  	}
-@@ -2321,6 +2958,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
+@@ -2321,6 +2959,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationTimeout(int value) {
@@ -1426,7 +1430,7 @@ index 6d99e31da..05f7b63fd 100644
  	if (_settings.proxyRotationTimeout() == value) {
  		return;
  	}
-@@ -2359,18 +2999,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+@@ -2359,18 +3000,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
  }
  
  void ProxiesBoxController::updateView(const Item &item) {
@@ -1479,7 +1483,7 @@ index 6d99e31da..05f7b63fd 100644
  			return item.state;
  		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
  			return ItemState::Online;
-@@ -2379,18 +3050,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+@@ -2379,18 +3051,19 @@ void ProxiesBoxController::updateView(const Item &item) {
  	}();
  	const auto supportsShare = ProxyDataIsShareable(item.data);
  	const auto supportsCalls = item.data.supportsCalls();
@@ -1503,7 +1507,7 @@ index 6d99e31da..05f7b63fd 100644
  
  void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
-index 5de98bc66..7268cb667 100644
+index 5de98bc663..7268cb6677 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
 @@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1607,7 +1611,7 @@ index 5de98bc66..7268cb667 100644
  
  	ProxyData _lastSelectedProxy;
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b84..2ca2e9ece 100644
+index 495bb0b846..2ca2e9ece1 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
 @@ -11,8 +11,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1877,7 +1881,7 @@ index 495bb0b84..2ca2e9ece 100644
  	return _settings;
  }
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.h b/Telegram/SourceFiles/core/core_settings_proxy.h
-index 1f2ec5c51..b9a6f6fdf 100644
+index 1f2ec5c516..b9a6f6fdfa 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.h
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.h
 @@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1941,7 +1945,7 @@ index 1f2ec5c51..b9a6f6fdf 100644
  	std::vector<MTP::ProxyData> _list;
  	std::vector<int> _proxyRotationPreferredIndices;
 diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
-index a643f0aee..27f4a7d02 100644
+index a643f0aee6..27f4a7d024 100644
 --- a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
 +++ b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
 @@ -19,14 +19,16 @@ namespace Core {
@@ -2209,7 +2213,7 @@ index a643f0aee..27f4a7d02 100644
  
  bool ProxyRotationManager::shouldSwitchToAvailable() const {
 diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.h b/Telegram/SourceFiles/core/proxy_rotation_manager.h
-index c1fee2769..9aee7bce9 100644
+index c1fee27696..9aee7bce96 100644
 --- a/Telegram/SourceFiles/core/proxy_rotation_manager.h
 +++ b/Telegram/SourceFiles/core/proxy_rotation_manager.h
 @@ -31,11 +31,11 @@ public:
@@ -2265,7 +2269,7 @@ index c1fee2769..9aee7bce9 100644
  
  };
 diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
-index 571e14eb3..a6e242556 100644
+index 571e14eb38..a6e242556b 100644
 --- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 +++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -2307,7 +2311,7 @@ index 571e14eb3..a6e242556 100644
  	_timeoutTimer.cancel();
  	if (_ipIndex >= 0) {
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a55..d1257e4b0 100644
+index 448190a556..d1257e4b00 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 @@ -8,20 +8,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -3459,7 +3463,7 @@ index 448190a55..d1257e4b0 100644
  }
  
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index d4a90083e..da3934d74 100644
+index d4a90083ea..da3934d748 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 @@ -57,6 +57,8 @@ private:
@@ -3472,7 +3476,7 @@ index d4a90083e..da3934d74 100644
  	QByteArray _incoming;
  	int _incomingGoodDataOffset = 0;
 diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
-index a7dd178b7..30920d133 100644
+index a7dd178b71..30920d1333 100644
 --- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
 @@ -409,6 +409,13 @@ void Instance::Private::applyDomainIps(
@@ -3490,7 +3494,7 @@ index a7dd178b7..30920d133 100644
  		const auto i = ranges::remove_if(current, [&](const QString &ip) {
  			const auto index = copy.indexOf(ip);
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c5402..cd97532ce 100644
+index f1f2c5402f..cd97532cec 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 @@ -10,9 +10,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -3674,7 +3678,7 @@ index f1f2c5402..cd97532ce 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f52..d568e5753 100644
+index 367ee3f523..d568e57539 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -3756,7 +3760,7 @@ index 367ee3f52..d568e5753 100644
  
  [[nodiscard]] ProxyData ToDirectIpProxy(
 diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
-index 831c8453c..9b41f569d 100644
+index 831c8453cf..9b41f569df 100644
 --- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
 +++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
 @@ -7,13 +7,245 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -4025,7 +4029,7 @@ index 831c8453c..9b41f569d 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/proxy_check.h b/Telegram/SourceFiles/mtproto/proxy_check.h
-index 1cbfb15fd..3f17aa877 100644
+index 1cbfb15fd2..3f17aa8779 100644
 --- a/Telegram/SourceFiles/mtproto/proxy_check.h
 +++ b/Telegram/SourceFiles/mtproto/proxy_check.h
 @@ -9,10 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
