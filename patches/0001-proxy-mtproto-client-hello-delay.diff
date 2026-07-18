@@ -45,18 +45,10 @@ index 3e51338c1..3aec78458 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da..dd1dfb3c3 100644
+index 6d99e31da..05f7b63fd 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
-@@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
- #include "ui/widgets/menu/menu_add_action_callback.h"
- #include "ui/widgets/menu/menu_add_action_callback_factory.h"
- #include "ui/widgets/popup_menu.h"
-+#include "ui/widgets/fields/number_input.h"
- #include "ui/wrap/slide_wrap.h"
- #include "ui/wrap/table_layout.h"
- #include "ui/wrap/vertical_layout.h"
-@@ -59,30 +60,83 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -59,30 +59,83 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "styles/style_menu_icons.h"
  #include "styles/style_settings.h"
  
@@ -150,7 +142,7 @@ index 6d99e31da..dd1dfb3c3 100644
  [[nodiscard]] std::vector<QString> ExtractLinkCandidates(const QString &input) {
  	auto urls = std::vector<QString>();
  	static const auto urlRegex = QRegularExpression(
-@@ -560,6 +614,7 @@ public:
+@@ -560,6 +613,7 @@ public:
  	ProxyRow(QWidget *parent, View &&view);
  
  	void updateFields(View &&view);
@@ -158,7 +150,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	rpl::producer<> deleteClicks() const;
  	rpl::producer<> restoreClicks() const;
-@@ -582,6 +637,7 @@ private:
+@@ -582,6 +636,7 @@ private:
  	View _view;
  
  	Ui::Text::String _title;
@@ -166,7 +158,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	object_ptr<Ui::IconButton> _menuToggle;
  	rpl::event_stream<> _deleteClicks;
  	rpl::event_stream<> _restoreClicks;
-@@ -591,6 +647,7 @@ private:
+@@ -591,6 +646,7 @@ private:
  	base::unique_qptr<Ui::DropdownMenu> _menu;
  
  	bool _set = false;
@@ -174,7 +166,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	Ui::Animations::Simple _toggled;
  	Ui::Animations::Simple _setAnimation;
  	std::unique_ptr<Ui::InfiniteRadialAnimation> _progress;
-@@ -626,16 +683,35 @@ private:
+@@ -626,16 +682,35 @@ private:
  	int rowHeight() const;
  	void refreshProxyForCalls();
  	void refreshProxyRotation();
@@ -215,7 +207,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	base::unique_qptr<Ui::RpWidget> _noRows;
  	object_ptr<Ui::VerticalLayout> _initialWrap;
  	QPointer<Ui::VerticalLayout> _wrap;
-@@ -746,13 +822,12 @@ void ProxyRow::updateFields(View &&view) {
+@@ -746,13 +821,12 @@ void ProxyRow::updateFields(View &&view) {
  			st::defaultRadio.duration);
  	}
  	_view = std::move(view);
@@ -233,7 +225,7 @@ index 6d99e31da..dd1dfb3c3 100644
  		Ui::ItemTextDefaultOptions());
  
  	const auto state = _view.state;
-@@ -786,7 +861,7 @@ void ProxyRow::updateFields(View &&view) {
+@@ -786,7 +860,7 @@ void ProxyRow::updateFields(View &&view) {
  			st::defaultRadio.duration);
  	}
  
@@ -242,7 +234,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	update();
  }
-@@ -797,11 +872,19 @@ void ProxyRow::radialAnimationCallback() {
+@@ -797,11 +871,19 @@ void ProxyRow::radialAnimationCallback() {
  	}
  }
  
@@ -262,7 +254,7 @@ index 6d99e31da..dd1dfb3c3 100644
  		+ st::proxyRowPadding.bottom();
  	auto right = st::proxyRowPadding.right();
  	_menuToggle->moveToRight(
-@@ -817,6 +900,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
+@@ -817,6 +899,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
  
  void ProxyRow::paintEvent(QPaintEvent *e) {
  	Painter p(this);
@@ -277,7 +269,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	if (!_view.deleted) {
  		paintRipple(p, 0, 0);
-@@ -830,7 +921,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+@@ -830,7 +920,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
  		p.setOpacity(st::stickersRowDisabledOpacity);
  	}
  
@@ -290,7 +282,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	p.setPen(st::proxyRowTitleFg);
  	p.setFont(st::semiboldFont);
-@@ -850,41 +946,70 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+@@ -850,41 +945,70 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
  			return st::proxyRowStatusFg;
  		}
  	}();
@@ -379,7 +371,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	top += st::normalFont->height + st::proxyRowPadding.bottom();
  }
  
-@@ -962,23 +1087,23 @@ void ProxyRow::showMenu() {
+@@ -962,23 +1086,23 @@ void ProxyRow::showMenu() {
  			const style::icon *icon) {
  		return _menu->addAction(text, std::move(callback), icon);
  	};
@@ -408,7 +400,7 @@ index 6d99e31da..dd1dfb3c3 100644
  			_deleteClicks.fire({});
  		}, &st::menuIconDelete);
  	}
-@@ -1020,6 +1145,9 @@ ProxiesBox::ProxiesBox(
+@@ -1020,6 +1144,9 @@ ProxiesBox::ProxiesBox(
  	const QString &highlightId)
  : _controller(controller)
  , _settings(settings)
@@ -418,7 +410,7 @@ index 6d99e31da..dd1dfb3c3 100644
  , _initialWrap(this)
  , _highlightId(highlightId) {
  	_controller->views(
-@@ -1041,10 +1169,10 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
+@@ -1041,10 +1168,10 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
  }
  
  void ProxiesBox::prepare() {
@@ -432,7 +424,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	setupTopButton();
  	setupContent();
-@@ -1078,13 +1206,13 @@ void ProxiesBox::setupTopButton() {
+@@ -1078,13 +1205,13 @@ void ProxiesBox::setupTopButton() {
  		const auto raw = menu->get();
  		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
  		addAction({
@@ -448,7 +440,7 @@ index 6d99e31da..dd1dfb3c3 100644
  				.handler = [=] { _controller->deleteItems(); },
  				.icon = &st::menuIconDeleteAttention,
  				.isAttention = true,
-@@ -1106,13 +1234,16 @@ void ProxiesBox::setupTopButton() {
+@@ -1106,13 +1233,16 @@ void ProxiesBox::setupTopButton() {
  
  void ProxiesBox::setupContent() {
  	const auto inner = setInnerWidget(object_ptr<Ui::VerticalLayout>(this));
@@ -471,7 +463,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	_proxySettings
  		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
  			_settings.settings());
-@@ -1121,90 +1252,253 @@ void ProxiesBox::setupContent() {
+@@ -1121,90 +1251,253 @@ void ProxiesBox::setupContent() {
  			inner,
  			_proxySettings,
  			ProxyData::Settings::Disabled,
@@ -780,7 +772,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	_wrap = inner->add(std::move(_initialWrap));
  	inner->add(object_ptr<Ui::FixedHeightWidget>(
-@@ -1218,41 +1512,104 @@ void ProxiesBox::setupContent() {
+@@ -1218,41 +1511,104 @@ void ProxiesBox::setupContent() {
  		}
  		refreshProxyForCalls();
  		refreshProxyRotation();
@@ -896,7 +888,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1262,7 +1619,7 @@ void ProxiesBox::setupContent() {
+@@ -1262,7 +1618,7 @@ void ProxiesBox::setupContent() {
  				object_ptr<Ui::VerticalLayout>(inner)));
  		const auto shareList = Settings::AddButtonWithIcon(
  			wrap->entity(),
@@ -905,7 +897,7 @@ index 6d99e31da..dd1dfb3c3 100644
  			st::settingsButton,
  			{ &st::menuIconCopy });
  		_shareListButton = shareList;
-@@ -1273,7 +1630,7 @@ void ProxiesBox::setupContent() {
+@@ -1273,7 +1629,7 @@ void ProxiesBox::setupContent() {
  		wrap->finishAnimating();
  	}
  
@@ -914,7 +906,7 @@ index 6d99e31da..dd1dfb3c3 100644
  
  	inner->heightValue(
  	) | rpl::map([=](int height) {
-@@ -1284,7 +1641,7 @@ void ProxiesBox::setupContent() {
+@@ -1284,7 +1640,7 @@ void ProxiesBox::setupContent() {
  			st::boxMaxListHeight);
  	}) | rpl::distinct_until_changed(
  	) | rpl::on_next([=](int height) {
@@ -923,7 +915,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	}, inner->lifetime());
  }
  
-@@ -1302,14 +1659,100 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1302,14 +1658,100 @@ void ProxiesBox::refreshProxyRotation() {
  	if (!_proxyRotation || !_proxyRotationOptions) {
  		return;
  	}
@@ -1028,7 +1020,7 @@ index 6d99e31da..dd1dfb3c3 100644
  }
  
  int ProxiesBox::rowHeight() const {
-@@ -1317,6 +1760,8 @@ int ProxiesBox::rowHeight() const {
+@@ -1317,6 +1759,8 @@ int ProxiesBox::rowHeight() const {
  		+ st::semiboldFont->height
  		+ st::proxyRowSkip
  		+ st::normalFont->height
@@ -1037,7 +1029,7 @@ index 6d99e31da..dd1dfb3c3 100644
  		+ st::proxyRowPadding.bottom();
  }
  
-@@ -1339,8 +1784,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1339,8 +1783,7 @@ void ProxiesBox::applyView(View &&view) {
  			? _wrap.data()
  			: _initialWrap.data();
  		const auto &[i, ok] = _rows.emplace(id, nullptr);
@@ -1047,7 +1039,7 @@ index 6d99e31da..dd1dfb3c3 100644
  			object_ptr<ProxyRow>(
  				wrap,
  				std::move(view))));
-@@ -1355,6 +1799,18 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1355,6 +1798,18 @@ void ProxiesBox::applyView(View &&view) {
  		i->second->updateFields(std::move(view));
  	}
  	refreshProxyRotation();
@@ -1066,7 +1058,7 @@ index 6d99e31da..dd1dfb3c3 100644
  }
  
  void ProxiesBox::createNoRowsLabel() {
-@@ -1364,13 +1820,13 @@ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1819,13 @@ void ProxiesBox::createNoRowsLabel() {
  			rowHeight()),
  		st::proxyEmptyListPadding));
  	_noRows->resize(
@@ -1082,7 +1074,7 @@ index 6d99e31da..dd1dfb3c3 100644
  		st::proxyEmptyListLabel);
  	_noRows->widthValue(
  	) | rpl::on_next([=](int width) {
-@@ -1404,7 +1860,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+@@ -1404,7 +1859,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
  
  	button->clicks(
  	) | rpl::on_next([=] {
@@ -1093,7 +1085,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	}, button->lifetime());
  }
  
-@@ -1714,9 +2172,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1714,9 +2171,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  		}
  	}, _lifetime);
  
@@ -1104,7 +1096,7 @@ index 6d99e31da..dd1dfb3c3 100644
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
-@@ -2003,51 +2459,146 @@ auto ProxiesBoxController::proxySettingsValue() const
+@@ -2003,49 +2458,147 @@ auto ProxiesBoxController::proxySettingsValue() const
  	) | rpl::distinct_until_changed();
  }
  
@@ -1236,15 +1228,18 @@ index 6d99e31da..dd1dfb3c3 100644
 +		if (!item.deleted) {
 +			refreshChecker(item, true);
 +		}
- 	}
- }
- 
++	}
++}
++
 +void ProxiesBoxController::cancelAllChecks() {
 +	for (auto &item : _list) {
 +		item.checker = nullptr;
 +		item.batchCheck = false;
 +		item.state = ItemState::Inactive;
-+	}
++		item.ping = 0;
++		item.checkedAt = QString();
++		updateView(item);
+ 	}
 +	_batchChecksLeft = 0;
 +	_checksRunning = false;
 +	_checksFinished.fire({});
@@ -1281,12 +1276,10 @@ index 6d99e31da..dd1dfb3c3 100644
 +	});
 +	_checksRunning = false;
 +	_checksFinished.fire({});
-+}
-+
+ }
+ 
  object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
- 		not_null<Main::Account*> account,
- 		const QString &highlightId) {
-@@ -2146,6 +2697,11 @@ void ProxiesBoxController::applyItem(int id) {
+@@ -2146,6 +2699,11 @@ void ProxiesBoxController::applyItem(int id) {
  
  void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	auto item = findById(id);
@@ -1298,7 +1291,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	item->deleted = deleted;
  
  	if (deleted) {
-@@ -2195,6 +2751,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+@@ -2195,6 +2753,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	}
  	saveDelayed();
  	updateView(*item);
@@ -1310,7 +1303,29 @@ index 6d99e31da..dd1dfb3c3 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
-@@ -2297,11 +2858,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+@@ -2217,16 +2780,18 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+ void ProxiesBoxController::replaceItemWith(
+ 		std::vector<Item>::iterator which,
+ 		std::vector<Item>::iterator with) {
++	const auto replacementId = with->id;
++	const auto replacementDeleted = with->deleted;
+ 	const auto removed = _settings.removeFromList(which->data);
+ 	Assert(removed);
+ 
+ 	_views.fire({ which->id });
+ 	_list.erase(which);
+ 
+-	if (with->deleted) {
+-		restoreItem(with->id);
++	if (replacementDeleted) {
++		restoreItem(replacementId);
+ 	}
+-	applyItem(with->id);
++	applyItem(replacementId);
+ 	saveDelayed();
+ }
+ 
+@@ -2297,11 +2862,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  		}
  	}
  	Core::App().setCurrentProxy(_settings.selected(), value);
@@ -1391,7 +1406,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	if (_settings.useProxyForCalls() == enabled) {
  		return;
  	}
-@@ -2313,6 +2943,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
+@@ -2313,6 +2947,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
@@ -1401,7 +1416,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	if (_settings.proxyRotationEnabled() == enabled) {
  		return;
  	}
-@@ -2321,6 +2954,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
+@@ -2321,6 +2958,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationTimeout(int value) {
@@ -1411,7 +1426,7 @@ index 6d99e31da..dd1dfb3c3 100644
  	if (_settings.proxyRotationTimeout() == value) {
  		return;
  	}
-@@ -2359,18 +2995,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+@@ -2359,18 +2999,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
  }
  
  void ProxiesBoxController::updateView(const Item &item) {
@@ -1464,7 +1479,7 @@ index 6d99e31da..dd1dfb3c3 100644
  			return item.state;
  		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
  			return ItemState::Online;
-@@ -2379,18 +3046,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+@@ -2379,18 +3050,19 @@ void ProxiesBoxController::updateView(const Item &item) {
  	}();
  	const auto supportsShare = ProxyDataIsShareable(item.data);
  	const auto supportsCalls = item.data.supportsCalls();
@@ -1592,11 +1607,14 @@ index 5de98bc66..7268cb667 100644
  
  	ProxyData _lastSelectedProxy;
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b84..869460eb1 100644
+index 495bb0b84..2ca2e9ece 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-@@ -13,6 +13,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -11,8 +11,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "storage/serialize_common.h"
+ 
  #include <algorithm>
++#include <optional>
  
  namespace Core {
 +
@@ -1610,7 +1628,7 @@ index 495bb0b84..869460eb1 100644
 +	case MTP::ProxyData::CHelloType::YandexGost: return 4;
 +	case MTP::ProxyData::CHelloType::Chromium150: return 5;
 +	}
-+	Unexpected("Bad type in ProxyCHelloTypesToInt");
++	return 0;
 +}
 +
 +[[nodiscard]] MTP::ProxyData::CHelloType IntToProxyCHelloType(qint32 value) {
@@ -1629,7 +1647,74 @@ index 495bb0b84..869460eb1 100644
  namespace {
  
  [[nodiscard]] qint32 ProxySettingsToInt(MTP::ProxyData::Settings settings) {
-@@ -109,7 +136,7 @@ std::vector<int> NormalizeProxyRotationPreferredIndices(
+@@ -21,7 +49,7 @@ namespace {
+ 	case MTP::ProxyData::Settings::Enabled: return 1;
+ 	case MTP::ProxyData::Settings::Disabled: return 2;
+ 	}
+-	Unexpected("Bad type in ProxySettingsToInt");
++	return 0;
+ }
+ 
+ [[nodiscard]] MTP::ProxyData::Settings IntToProxySettings(qint32 value) {
+@@ -30,14 +58,17 @@ namespace {
+ 	case 1: return MTP::ProxyData::Settings::Enabled;
+ 	case 2: return MTP::ProxyData::Settings::Disabled;
+ 	}
+-	Unexpected("Bad type in IntToProxySettings");
++	return MTP::ProxyData::Settings::System;
+ }
+ 
++constexpr auto kMaximumSerializedProxyCount = 4096;
++
+ [[nodiscard]] MTP::ProxyData DeserializeProxyData(const QByteArray &data) {
+ 	QDataStream stream(data);
+ 	stream.setVersion(QDataStream::Qt_5_1);
+ 
+-	qint32 proxyType, port;
++	auto proxyType = qint32(0);
++	auto port = qint32(0);
+ 	MTP::ProxyData proxy;
+ 	stream
+ 		>> proxyType
+@@ -45,16 +76,25 @@ namespace {
+ 		>> port
+ 		>> proxy.user
+ 		>> proxy.password;
+-	proxy.port = port;
+-	proxy.type = [&] {
++	if (stream.status() != QDataStream::Ok) {
++		return {};
++	}
++	const auto type = [&]() -> std::optional<MTP::ProxyData::Type> {
+ 		switch(proxyType) {
+ 		case 0: return MTP::ProxyData::Type::None;
+ 		case 1: return MTP::ProxyData::Type::Socks5;
+ 		case 2: return MTP::ProxyData::Type::Http;
+ 		case 3: return MTP::ProxyData::Type::Mtproto;
+ 		}
+-		Unexpected("Bad type in DeserializeProxyData");
++		return std::nullopt;
+ 	}();
++	if (!type
++		|| port < 0
++		|| port > 65535) {
++		return {};
++	}
++	proxy.port = port;
++	proxy.type = *type;
+ 	return proxy;
+ }
+ 
+@@ -75,7 +115,7 @@ namespace {
+ 			case MTP::ProxyData::Type::Http: return 2;
+ 			case MTP::ProxyData::Type::Mtproto: return 3;
+ 			}
+-			Unexpected("Bad type in SerializeProxyData");
++			return 0;
+ 		}();
+ 
+ 		QDataStream stream(&result, QIODevice::WriteOnly);
+@@ -109,7 +149,7 @@ std::vector<int> NormalizeProxyRotationPreferredIndices(
  } // namespace
  
  SettingsProxy::SettingsProxy()
@@ -1638,7 +1723,7 @@ index 495bb0b84..869460eb1 100644
  }
  
  QByteArray SettingsProxy::serialize() const {
-@@ -126,7 +153,7 @@ QByteArray SettingsProxy::serialize() const {
+@@ -126,7 +166,7 @@ QByteArray SettingsProxy::serialize() const {
  			0,
  			ranges::plus(),
  			&Serialize::bytearraySize)
@@ -1647,7 +1732,7 @@ index 495bb0b84..869460eb1 100644
  	auto stream = Serialize::ByteArrayWriter(size);
  	stream
  		<< qint32(_tryIPv6 ? 1 : 0)
-@@ -145,6 +172,13 @@ QByteArray SettingsProxy::serialize() const {
+@@ -145,6 +185,13 @@ QByteArray SettingsProxy::serialize() const {
  	for (const auto index : _proxyRotationPreferredIndices) {
  		stream << qint32(index);
  	}
@@ -1661,7 +1746,27 @@ index 495bb0b84..869460eb1 100644
  	return std::move(stream).result();
  }
  
-@@ -210,6 +244,26 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -170,7 +217,8 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 			>> selectedProxy
+ 			>> listCount;
+ 		if (stream.ok()) {
+-			if (listCount < 0) {
++			if (listCount < 0
++				|| listCount > kMaximumSerializedProxyCount) {
+ 				return false;
+ 			}
+ 			list.reserve(listCount);
+@@ -199,7 +247,8 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 	if (!stream.atEnd()) {
+ 		stream >> preferredCount;
+ 		if (stream.ok()) {
+-			if (preferredCount < 0) {
++			if (preferredCount < 0
++				|| preferredCount > kMaximumSerializedProxyCount) {
+ 				return false;
+ 			}
+ 			preferredIndices.reserve(preferredCount);
+@@ -210,6 +259,26 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  			}
  		}
  	}
@@ -1688,7 +1793,7 @@ index 495bb0b84..869460eb1 100644
  
  	if (!stream.ok()) {
  		LOG(("App Error: "
-@@ -217,7 +271,9 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -217,7 +286,9 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  		return false;
  	}
  
@@ -1699,7 +1804,7 @@ index 495bb0b84..869460eb1 100644
  	_useProxyForCalls = (useProxyForCalls == 1);
  	_checkIpWarningShown = (checkIpWarningShown == 1);
  	_proxyRotationEnabled = (proxyRotationEnabled == 1);
-@@ -226,7 +282,18 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -226,7 +297,18 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  	_selected = DeserializeProxyData(selectedProxy);
  	_list = std::move(list);
  	setProxyRotationPreferredIndices(std::move(preferredIndices));
@@ -1719,7 +1824,7 @@ index 495bb0b84..869460eb1 100644
  	return true;
  }
  
-@@ -306,10 +373,50 @@ int SettingsProxy::proxyRotationTimeout() const {
+@@ -306,10 +388,50 @@ int SettingsProxy::proxyRotationTimeout() const {
  
  void SettingsProxy::setProxyRotationTimeout(int value) {
  	_proxyRotationTimeout = (value > 0)
@@ -2160,7 +2265,7 @@ index c1fee2769..9aee7bce9 100644
  
  };
 diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
-index 571e14eb3..97528924c 100644
+index 571e14eb3..a6e242556 100644
 --- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 +++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -2172,26 +2277,40 @@ index 571e14eb3..97528924c 100644
  namespace MTP {
  namespace details {
  namespace {
-@@ -93,8 +95,13 @@ void ResolvingConnection::domainResolved(
+@@ -93,8 +95,16 @@ void ResolvingConnection::domainResolved(
  	}
  	_proxy.resolvedExpireAt = expireAt;
  
 +	auto ordered = ips;
++	const auto preferIPv6 = ProxyData::globalPreferIPv6();
 +	std::stable_sort(
 +		ordered.begin(),
 +		ordered.end(),
-+		ProxyData::addressComesFirst);
++		[=](const QString &a, const QString &b) {
++			return ProxyData::addressComesFirst(a, b, preferIPv6);
++		});
  	auto index = 0;
 -	for (const auto &ip : ips) {
 +	for (const auto &ip : ordered) {
  		if (index >= _proxy.resolvedIPs.size()) {
  			_proxy.resolvedIPs.push_back(ip);
  		} else if (_proxy.resolvedIPs[index] != ip) {
+@@ -165,6 +175,10 @@ void ResolvingConnection::handleReceivedData() {
+ }
+ 
+ void ResolvingConnection::handleConnected() {
++	if (_ipIndex >= int(_proxy.resolvedIPs.size())) {
++		emitError(kErrorCodeOther);
++		return;
++	}
+ 	_connected = true;
+ 	_timeoutTimer.cancel();
+ 	if (_ipIndex >= 0) {
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a55..b8cfe95a2 100644
+index 448190a55..d1257e4b0 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -8,20 +8,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -8,20 +8,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "mtproto/details/mtproto_tls_socket.h"
  
  #include "mtproto/details/mtproto_tcp_socket.h"
@@ -2218,10 +2337,11 @@ index 448190a55..b8cfe95a2 100644
  constexpr auto kMaxGrease = 8;
 -constexpr auto kClientHelloLimit = 2048;
 +constexpr auto kClientHelloLimit = 4096;
++constexpr auto kMaximumDelayedConnect = std::chrono::minutes(5);
  constexpr auto kHelloDigestLength = 32;
  constexpr auto kLengthSize = sizeof(uint16);
  constexpr auto kMaxServerHelloLength = 65536;
-@@ -36,7 +44,7 @@ const auto kClientHeader = qstr("\x17\x03\x03");
+@@ -36,7 +45,7 @@ const auto kClientHeader = qstr("\x17\x03\x03");
  using BigNum = openssl::BigNum;
  using BigNumContext = openssl::Context;
  
@@ -2230,7 +2350,7 @@ index 448190a55..b8cfe95a2 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -231,6 +239,923 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +240,938 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -3062,6 +3182,7 @@ index 448190a55..b8cfe95a2 100644
 +	static MTPTlsClientHello chRules_chromium150Fresh = PrepareClientHelloRules_Chromium150(false);
 +	static MTPTlsClientHello chRules_chromium150Resumed = PrepareClientHelloRules_Chromium150(true);
 +	static QMutex chromium150Mutex;
++	constexpr auto kMaximumChromium150EndpointStates = 128;
 +	struct Chromium150EndpointState {
 +		std::chrono::steady_clock::time_point seenAt;
 +		std::chrono::minutes ttl;
@@ -3121,7 +3242,21 @@ index 448190a55..b8cfe95a2 100644
 +						? chromium150SeenByEndpoint.erase(i)
 +						: std::next(i);
 +				}
-+				auto &state = chromium150SeenByEndpoint[{ address, port }];
++				const auto key = std::pair(address, port);
++				if (!chromium150SeenByEndpoint.contains(key)
++					&& chromium150SeenByEndpoint.size()
++						>= kMaximumChromium150EndpointStates) {
++					const auto oldest = std::min_element(
++						begin(chromium150SeenByEndpoint),
++						end(chromium150SeenByEndpoint),
++						[](const auto &a, const auto &b) {
++							return a.second.seenAt < b.second.seenAt;
++						});
++					if (oldest != end(chromium150SeenByEndpoint)) {
++						chromium150SeenByEndpoint.erase(oldest);
++					}
++				}
++				auto &state = chromium150SeenByEndpoint[key];
 +				const auto result = state.seenAt.time_since_epoch().count() != 0
 +					&& now - state.seenAt < state.ttl;
 +				if (!result) {
@@ -3154,7 +3289,103 @@ index 448190a55..b8cfe95a2 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -653,7 +1578,7 @@ void TlsSocket::plainConnected() {
+@@ -271,7 +1212,9 @@ using BigNumContext = openssl::Context;
+ 	if (!EVP_PKEY_get_raw_public_key(key, nullptr, &length)) {
+ 		return {};
+ 	}
+-	Assert(length == 32);
++	if (length != 32) {
++		return {};
++	}
+ 
+ 	auto result = bytes::vector(length);
+ 	const auto code = EVP_PKEY_get_raw_public_key(
+@@ -281,6 +1224,9 @@ using BigNumContext = openssl::Context;
+ 	if (!code) {
+ 		return {};
+ 	}
++	if (length != result.size()) {
++		return {};
++	}
+ 	return result;
+ }
+ 
+@@ -304,7 +1250,7 @@ private:
+ 			bytes::const_span domain,
+ 			const bytes::vector &greases);
+ 
+-		[[nodiscard]] bytes::span grow(int size);
++		[[nodiscard]] bytes::span grow(std::size_t size);
+ 		void writeBlocks(const QVector<MTPTlsBlock> &blocks);
+ 		void writeBlock(const MTPTlsBlock &data);
+ 		void writeBlock(const MTPDtlsBlockString &data);
+@@ -362,16 +1308,16 @@ QByteArray Generator::Part::take() {
+ 	return _error ? QByteArray() : std::move(_result);
+ }
+ 
+-bytes::span Generator::Part::grow(int size) {
++bytes::span Generator::Part::grow(std::size_t size) {
+ 	if (_error
+-		|| size <= 0
+-		|| _result.size() + size > kClientHelloLimit) {
++		|| !size
++		|| size > std::size_t(kClientHelloLimit - _result.size())) {
+ 		_error = true;
+ 		return bytes::span();
+ 	}
+ 
+ 	const auto offset = _result.size();
+-	_result.resize(offset + size);
++	_result.resize(offset + int(size));
+ 	return bytes::make_detached_span(_result).subspan(offset);
+ }
+ 
+@@ -411,7 +1357,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
+ 
+ void Generator::Part::writeBlock(const MTPDtlsBlockGrease &data) {
+ 	const auto seed = data.vseed().v;
+-	if (seed < 0 || seed >= _greases.size()) {
++	if (seed < 0 || std::size_t(seed) >= _greases.size()) {
+ 		_error = true;
+ 		return;
+ 	}
+@@ -494,10 +1440,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
+ 	bytes::set_random(random);
+ 
+ 	auto chars = reinterpret_cast<char*>(storage.data());
+-	const auto ints = reinterpret_cast<const uint32*>(random.data());
+ 	for (auto i = 0; i < kElements; ++i) {
+-		const auto a = int(ints[i * 2] % 3329);
+-		const auto b = int(ints[i * 2 + 1] % 3329);
++		const auto offset = std::size_t(i) * 2 * sizeof(uint32);
++		const auto a = int(qFromLittleEndian<uint32>(
++			random.data() + offset) % 3329);
++		const auto b = int(qFromLittleEndian<uint32>(
++			random.data() + offset + sizeof(uint32)) % 3329);
+ 		*chars++ = (char)(a & 255);
+ 		*chars++ = (char)((a >> 8) + ((b & 15) << 4));
+ 		*chars++ = (char)(b >> 4);
+@@ -523,7 +1471,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
+ void Generator::Part::finalize(bytes::const_span key) {
+ 	if (_error) {
+ 		return;
+-	} else if (_digestPosition < 0) {
++	} else if (_digestPosition < 0
++		|| _digestPosition > _result.size() - kHelloDigestLength) {
+ 		_error = true;
+ 		return;
+ 	}
+@@ -532,7 +1481,8 @@ void Generator::Part::finalize(bytes::const_span key) {
+ }
+ 
+ QByteArray Generator::Part::extractDigest() const {
+-	if (_digestPosition < 0) {
++	if (_digestPosition < 0
++		|| _digestPosition > _result.size() - kHelloDigestLength) {
+ 		return {};
+ 	}
+ 	return _result.mid(_digestPosition, kHelloDigestLength);
+@@ -653,7 +1603,7 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -3163,7 +3394,19 @@ index 448190a55..b8cfe95a2 100644
  	const auto hello = PrepareClientHello(
  		kClientHelloRules,
  		domainFromSecret(),
-@@ -854,6 +1779,50 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -699,6 +1649,11 @@ void TlsSocket::readHello() {
+ 			return;
+ 		}
+ 		_incoming.append(_socket.readAll());
++		if (_incoming.size() > kHelloDigestLength + kMaxServerHelloLength) {
++			logError(888, "Server Hello exceeds the size limit.");
++			handleError();
++			return;
++		}
+ 	}
+ 	checkHelloParts12(parts1Size);
+ }
+@@ -854,6 +1809,51 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -3194,10 +3437,11 @@ index 448190a55..b8cfe95a2 100644
 +					slot = sc::steady_clock::time_point{};
 +				}
 +			}
++			const auto maximum = now + kMaximumDelayedConnect;
 +			if (slot.time_since_epoch().count() == 0) {
-+				slot = now + sc::milliseconds(gap);
++				slot = std::min(now + sc::milliseconds(gap), maximum);
 +			} else {
-+				slot += sc::milliseconds(gap);
++				slot = std::min(slot + sc::milliseconds(gap), maximum);
 +			}
 +		}
 +		if (waitFor.count() > 0) {
@@ -3228,25 +3472,28 @@ index d4a90083e..da3934d74 100644
  	QByteArray _incoming;
  	int _incomingGoodDataOffset = 0;
 diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
-index a7dd178b7..06467f26b 100644
+index a7dd178b7..30920d133 100644
 --- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
-@@ -409,6 +409,10 @@ void Instance::Private::applyDomainIps(
+@@ -409,6 +409,13 @@ void Instance::Private::applyDomainIps(
  		}
  		proxy.resolvedExpireAt = expireAt;
  		auto copy = ips;
++		const auto preferIPv6 = ProxyData::globalPreferIPv6();
 +		std::stable_sort(
 +			copy.begin(),
 +			copy.end(),
-+			ProxyData::addressComesFirst);
++			[=](const QString &a, const QString &b) {
++				return ProxyData::addressComesFirst(a, b, preferIPv6);
++			});
  		auto &current = proxy.resolvedIPs;
  		const auto i = ranges::remove_if(current, [&](const QString &ip) {
  			const auto index = copy.indexOf(ip);
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c5402..7b56ef51f 100644
+index f1f2c5402..cd97532ce 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-@@ -10,9 +10,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -10,9 +10,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "base/qthelp_url.h"
  #include "base/qt/qt_string_view.h"
  
@@ -3265,11 +3512,24 @@ index f1f2c5402..7b56ef51f 100644
 +
 +std::vector<StoredCHelloStatus> CHelloStatuses;
 +constexpr auto kMaximumStoredCHelloStatuses = 128;
++constexpr auto kMaximumSlowTimingValue = 9999;
 +
  [[nodiscard]] bool IsHexMtprotoPassword(const QString &password) {
  	const auto size = password.size();
  	if (size < 32 || size % 2 == 1) {
-@@ -166,7 +179,7 @@ bool ProxyData::tryCustomResolve() const {
+@@ -150,7 +164,10 @@ bool ProxyData::valid() const {
+ }
+ 
+ ProxyData::Status ProxyData::status() const {
+-	if (type == Type::None || host.isEmpty() || !port) {
++	if (type == Type::None
++		|| host.isEmpty()
++		|| port <= 0
++		|| port > 65535) {
+ 		return Status::Invalid;
+ 	} else if (type == Type::Mtproto) {
+ 		return MtprotoPasswordStatus(password);
+@@ -166,7 +183,7 @@ bool ProxyData::tryCustomResolve() const {
  	static const auto RegExp = QRegularExpression(
  		QStringLiteral("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
  	);
@@ -3278,7 +3538,7 @@ index f1f2c5402..7b56ef51f 100644
  		&& !qthelp::is_ipv6(host)
  		&& !RegExp.match(host).hasMatch();
  }
-@@ -245,4 +258,127 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
+@@ -245,4 +262,134 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
  		proxy.password);
  }
  
@@ -3358,11 +3618,13 @@ index f1f2c5402..7b56ef51f 100644
 +	}
 +	auto result = i->value;
 +	if (result.chromium150 && result.ttlLeftMinutes > 0) {
-+		const auto elapsedMinutes = int(
-+			(crl::now() - i->updatedAt) / crl::time(60 * 1000));
++		const auto elapsedMinutes = std::clamp(
++			(crl::now() - i->updatedAt) / crl::time(60 * 1000),
++			crl::time(0),
++			crl::time(result.ttlLeftMinutes));
 +		result.ttlLeftMinutes = std::max(
 +			0,
-+			result.ttlLeftMinutes - elapsedMinutes);
++			result.ttlLeftMinutes - int(elapsedMinutes));
 +	}
 +	return result;
 +}
@@ -3372,7 +3634,9 @@ index f1f2c5402..7b56ef51f 100644
 +}
 +
 +void ProxyData::setGlobalSlowDelay(int value) {
-+	global_slow_delay.store(value, std::memory_order_relaxed);
++	global_slow_delay.store(
++		std::clamp(value, 1, kMaximumSlowTimingValue),
++		std::memory_order_relaxed);
 +}
 +
 +int ProxyData::globalSlowDelay() {
@@ -3380,7 +3644,9 @@ index f1f2c5402..7b56ef51f 100644
 +}
 +
 +void ProxyData::setGlobalSlowJitter(int value) {
-+	global_slow_jitter.store(value, std::memory_order_relaxed);
++	global_slow_jitter.store(
++		std::clamp(value, 0, kMaximumSlowTimingValue),
++		std::memory_order_relaxed);
 +}
 +
 +int ProxyData::globalSlowJitter() {
@@ -3397,17 +3663,18 @@ index f1f2c5402..7b56ef51f 100644
 +
 +bool ProxyData::addressComesFirst(
 +		const QString &first,
-+		const QString &second) {
++		const QString &second,
++		bool preferIPv6) {
 +	const auto firstV6 = qthelp::is_ipv6(first);
 +	const auto secondV6 = qthelp::is_ipv6(second);
 +	return (firstV6 == secondV6)
 +		? false
-+		: (firstV6 == globalPreferIPv6());
++		: (firstV6 == preferIPv6);
 +}
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f52..28d5fe6c0 100644
+index 367ee3f52..d568e5753 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -3449,7 +3716,7 @@ index 367ee3f52..28d5fe6c0 100644
  
  	Type type = Type::None;
  	QString host;
-@@ -51,6 +76,37 @@ struct ProxyData {
+@@ -51,6 +76,38 @@ struct ProxyData {
  	[[nodiscard]] static Status MtprotoPasswordStatus(
  		const QString &password);
  
@@ -3475,7 +3742,8 @@ index 367ee3f52..28d5fe6c0 100644
 +	[[nodiscard]] static bool globalPreferIPv6();
 +	[[nodiscard]] static bool addressComesFirst(
 +		const QString &first,
-+		const QString &second);
++		const QString &second,
++		bool preferIPv6);
 +
 +private:
 +	static std::atomic<ProxyData::CHelloType> global_ch_type;
@@ -3488,10 +3756,10 @@ index 367ee3f52..28d5fe6c0 100644
  
  [[nodiscard]] ProxyData ToDirectIpProxy(
 diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
-index 831c8453c..7ac99d681 100644
+index 831c8453c..9b41f569d 100644
 --- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
 +++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
-@@ -7,13 +7,223 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,13 +7,245 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "mtproto/proxy_check.h"
  
@@ -3546,7 +3814,7 @@ index 831c8453c..7ac99d681 100644
 +			}
 +		}
 +		auto entry = std::make_unique<Entry>();
-+		entry->id = ++_idCounter;
++		entry->id = nextId();
 +		entry->mtproto = mtproto.get();
 +		entry->proxy = proxy;
 +		entry->tryIPv6 = tryIPv6;
@@ -3563,11 +3831,13 @@ index 831c8453c..7ac99d681 100644
 +		ProxyData proxy;
 +		bool tryIPv6 = false;
 +		bool active = false;
++		bool starting = false;
 +		bool finished = false;
 +		crl::time startedAt = 0;
 +		ProxyCheckConnection v4;
 +		ProxyCheckConnection v6;
 +		std::vector<std::weak_ptr<ProxyCheckHandle>> listeners;
++		std::optional<int> pendingPing;
 +	};
 +
 +	[[nodiscard]] Entry *find(uint64 id) {
@@ -3576,6 +3846,13 @@ index 831c8453c..7ac99d681 100644
 +			id,
 +			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
 +		return (i == end(_entries)) ? nullptr : i->get();
++	}
++
++	[[nodiscard]] uint64 nextId() {
++		do {
++			++_idCounter;
++		} while (!_idCounter || find(_idCounter));
++		return _idCounter;
 +	}
 +
 +	void startQueued() {
@@ -3601,6 +3878,7 @@ index 831c8453c..7ac99d681 100644
 +				continue;
 +			}
 +			entry.active = true;
++			entry.starting = true;
 +			entry.startedAt = crl::now();
 +			++_activeCount;
 +			const auto id = entry.id;
@@ -3616,7 +3894,14 @@ index 831c8453c..7ac99d681 100644
 +				[=](Connection *raw) {
 +					checkFailed(id, raw);
 +				});
-+			if (!HasProxyCheckers(entry.v4, entry.v6)) {
++			const auto started = find(id);
++			if (!started) {
++				continue;
++			}
++			started->starting = false;
++			if (started->pendingPing) {
++				finish(id, started->pendingPing);
++			} else if (!HasProxyCheckers(started->v4, started->v6)) {
 +				finish(id, std::nullopt);
 +			}
 +		}
@@ -3657,7 +3942,12 @@ index 831c8453c..7ac99d681 100644
 +			return;
 +		}
 +		DropProxyChecker(entry->v4, entry->v6, raw);
-+		finish(id, ping);
++		const auto normalized = std::max(ping, 1);
++		if (entry->starting) {
++			entry->pendingPing = normalized;
++		} else {
++			finish(id, normalized);
++		}
 +	}
 +
 +	void checkFailed(uint64 id, not_null<Connection*> raw) {
@@ -3666,7 +3956,7 @@ index 831c8453c..7ac99d681 100644
 +			return;
 +		}
 +		DropProxyChecker(entry->v4, entry->v6, raw);
-+		if (!HasProxyCheckers(entry->v4, entry->v6)) {
++		if (!entry->starting && !HasProxyCheckers(entry->v4, entry->v6)) {
 +			finish(id, std::nullopt);
 +		}
 +	}
@@ -3684,7 +3974,7 @@ index 831c8453c..7ac99d681 100644
 +			id,
 +			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
 +		_entries.erase(i);
-+		--_activeCount;
++		_activeCount = std::max(_activeCount - 1, 0);
 +		for (const auto &weak : listeners) {
 +			if (const auto strong = weak.lock()) {
 +				if (ping) {
@@ -3715,7 +4005,7 @@ index 831c8453c..7ac99d681 100644
  void ResetProxyCheckers(
  		ProxyCheckConnection &v4,
  		ProxyCheckConnection &v6) {
-@@ -108,4 +318,18 @@ void StartProxyCheck(
+@@ -108,4 +340,18 @@ void StartProxyCheck(
  	tryConnect(v6, Variants::IPv6);
  }
  
