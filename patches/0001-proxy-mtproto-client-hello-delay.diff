@@ -2310,7 +2310,7 @@ index 571e14eb38..a6e242556b 100644
  	_timeoutTimer.cancel();
  	if (_ipIndex >= 0) {
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a556..81f83a1e9e 100644
+index 448190a556..309c2f99ea 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 @@ -8,20 +8,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -2354,7 +2354,7 @@ index 448190a556..81f83a1e9e 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -231,6 +241,972 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +241,975 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -3160,14 +3160,17 @@ index 448190a556..81f83a1e9e 100644
 +	G(3);
 +	S("\x00\x01\x00"_q);
 +	if (resumed) {
-+		S("\x00\x29\x00\x94"_q);
-+		S("\x00\x6f"_q);
-+		S("\x00\x69"_q);
-+		R(105);
++		S("\x00\x29"_q);
++		OpenScope();
++		OpenScope();
++		OpenScope();
++		R(113);
++		CloseScope();
 +		R(4);
-+		S("\x00\x21"_q);
-+		S("\x20"_q);
++		CloseScope();
++		S("\x00\x21\x20"_q);
 +		R(32);
++		CloseScope();
 +	}
 +	CloseScope();
 +	CloseScope();
@@ -3327,7 +3330,18 @@ index 448190a556..81f83a1e9e 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -271,7 +1247,9 @@ using BigNumContext = openssl::Context;
+@@ -246,8 +1225,8 @@ using BigNumContext = openssl::Context;
+ 	return result;
+ }
+ 
+-[[nodiscard]] bytes::vector GeneratePublicKey() {
+-	const auto context = EVP_PKEY_CTX_new_id(NID_ED25519, nullptr);
++[[nodiscard]] bytes::vector GenerateX25519PublicKey() {
++	const auto context = EVP_PKEY_CTX_new_id(NID_X25519, nullptr);
+ 	if (!context) {
+ 		return {};
+ 	}
+@@ -271,7 +1250,9 @@ using BigNumContext = openssl::Context;
  	if (!EVP_PKEY_get_raw_public_key(key, nullptr, &length)) {
  		return {};
  	}
@@ -3338,7 +3352,7 @@ index 448190a556..81f83a1e9e 100644
  
  	auto result = bytes::vector(length);
  	const auto code = EVP_PKEY_get_raw_public_key(
-@@ -281,6 +1259,9 @@ using BigNumContext = openssl::Context;
+@@ -281,6 +1262,9 @@ using BigNumContext = openssl::Context;
  	if (!code) {
  		return {};
  	}
@@ -3348,7 +3362,7 @@ index 448190a556..81f83a1e9e 100644
  	return result;
  }
  
-@@ -304,7 +1285,7 @@ private:
+@@ -304,7 +1288,7 @@ private:
  			bytes::const_span domain,
  			const bytes::vector &greases);
  
@@ -3357,7 +3371,7 @@ index 448190a556..81f83a1e9e 100644
  		void writeBlocks(const QVector<MTPTlsBlock> &blocks);
  		void writeBlock(const MTPTlsBlock &data);
  		void writeBlock(const MTPDtlsBlockString &data);
-@@ -362,16 +1343,16 @@ QByteArray Generator::Part::take() {
+@@ -362,16 +1346,16 @@ QByteArray Generator::Part::take() {
  	return _error ? QByteArray() : std::move(_result);
  }
  
@@ -3378,7 +3392,7 @@ index 448190a556..81f83a1e9e 100644
  	return bytes::make_detached_span(_result).subspan(offset);
  }
  
-@@ -411,7 +1392,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
+@@ -411,7 +1395,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
  
  void Generator::Part::writeBlock(const MTPDtlsBlockGrease &data) {
  	const auto seed = data.vseed().v;
@@ -3387,7 +3401,16 @@ index 448190a556..81f83a1e9e 100644
  		_error = true;
  		return;
  	}
-@@ -494,10 +1475,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
+@@ -440,7 +1424,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
+ }
+ 
+ void Generator::Part::writeBlock(const MTPDtlsBlockPublicKey &data) {
+-	const auto key = GeneratePublicKey();
++	const auto key = GenerateX25519PublicKey();
+ 	const auto storage = grow(key.size());
+ 	if (storage.empty()) {
+ 		return;
+@@ -494,10 +1478,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
  	bytes::set_random(random);
  
  	auto chars = reinterpret_cast<char*>(storage.data());
@@ -3403,7 +3426,7 @@ index 448190a556..81f83a1e9e 100644
  		*chars++ = (char)(a & 255);
  		*chars++ = (char)((a >> 8) + ((b & 15) << 4));
  		*chars++ = (char)(b >> 4);
-@@ -523,7 +1506,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
+@@ -523,7 +1509,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
  void Generator::Part::finalize(bytes::const_span key) {
  	if (_error) {
  		return;
@@ -3413,7 +3436,7 @@ index 448190a556..81f83a1e9e 100644
  		_error = true;
  		return;
  	}
-@@ -532,7 +1516,8 @@ void Generator::Part::finalize(bytes::const_span key) {
+@@ -532,7 +1519,8 @@ void Generator::Part::finalize(bytes::const_span key) {
  }
  
  QByteArray Generator::Part::extractDigest() const {
@@ -3423,7 +3446,7 @@ index 448190a556..81f83a1e9e 100644
  		return {};
  	}
  	return _result.mid(_digestPosition, kHelloDigestLength);
-@@ -653,10 +1638,21 @@ void TlsSocket::plainConnected() {
+@@ -653,10 +1641,21 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -3448,7 +3471,7 @@ index 448190a556..81f83a1e9e 100644
  		keyFromSecret());
  	if (hello.data.isEmpty()) {
  		logError(888, "Could not generate Client Hello.");
-@@ -671,6 +1667,7 @@ void TlsSocket::plainConnected() {
+@@ -671,6 +1670,7 @@ void TlsSocket::plainConnected() {
  
  void TlsSocket::plainDisconnected() {
  	_state = State::NotConnected;
@@ -3456,7 +3479,7 @@ index 448190a556..81f83a1e9e 100644
  	_incoming = QByteArray();
  	_serverHelloLength = 0;
  	_incomingGoodDataOffset = 0;
-@@ -699,6 +1696,11 @@ void TlsSocket::readHello() {
+@@ -699,6 +1699,11 @@ void TlsSocket::readHello() {
  			return;
  		}
  		_incoming.append(_socket.readAll());
@@ -3468,7 +3491,7 @@ index 448190a556..81f83a1e9e 100644
  	}
  	checkHelloParts12(parts1Size);
  }
-@@ -794,6 +1796,19 @@ void TlsSocket::checkHelloDigest() {
+@@ -794,6 +1799,19 @@ void TlsSocket::checkHelloDigest() {
  	}
  	_incomingGoodDataOffset = _incomingGoodDataLimit = 0;
  	_state = State::Connected;
@@ -3488,7 +3511,7 @@ index 448190a556..81f83a1e9e 100644
  	_connected.fire({});
  }
  
-@@ -854,6 +1869,51 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -854,6 +1872,51 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -3540,7 +3563,7 @@ index 448190a556..81f83a1e9e 100644
  	_socket.connectToHost(address, port);
  }
  
-@@ -954,6 +2014,7 @@ void TlsSocket::handleError(int errorCode) {
+@@ -954,6 +2017,7 @@ void TlsSocket::handleError(int errorCode) {
  		logError(errorCode, _socket.errorString());
  	}
  	_state = State::Error;
