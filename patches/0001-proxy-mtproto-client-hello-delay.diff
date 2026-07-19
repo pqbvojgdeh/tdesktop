@@ -48,10 +48,10 @@ index 3e51338c13..a3f1c5fbc1 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da3..69f6c2333a 100644
+index 6d99e31da3..8359f82af0 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
-@@ -59,30 +59,83 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -59,30 +59,84 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "styles/style_menu_icons.h"
  #include "styles/style_settings.h"
  
@@ -59,6 +59,7 @@ index 6d99e31da3..69f6c2333a 100644
 +#include <QtCore/QTime>
  #include <QtGui/QGuiApplication>
  #include <QtGui/QClipboard>
++#include <QtGui/QIntValidator>
  #include <QtWidgets/QTextEdit>
  
 +#include <array>
@@ -145,7 +146,7 @@ index 6d99e31da3..69f6c2333a 100644
  [[nodiscard]] std::vector<QString> ExtractLinkCandidates(const QString &input) {
  	auto urls = std::vector<QString>();
  	static const auto urlRegex = QRegularExpression(
-@@ -560,6 +613,7 @@ public:
+@@ -560,6 +614,7 @@ public:
  	ProxyRow(QWidget *parent, View &&view);
  
  	void updateFields(View &&view);
@@ -153,7 +154,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	rpl::producer<> deleteClicks() const;
  	rpl::producer<> restoreClicks() const;
-@@ -582,6 +636,7 @@ private:
+@@ -582,6 +637,7 @@ private:
  	View _view;
  
  	Ui::Text::String _title;
@@ -161,7 +162,7 @@ index 6d99e31da3..69f6c2333a 100644
  	object_ptr<Ui::IconButton> _menuToggle;
  	rpl::event_stream<> _deleteClicks;
  	rpl::event_stream<> _restoreClicks;
-@@ -591,6 +646,7 @@ private:
+@@ -591,6 +647,7 @@ private:
  	base::unique_qptr<Ui::DropdownMenu> _menu;
  
  	bool _set = false;
@@ -169,7 +170,7 @@ index 6d99e31da3..69f6c2333a 100644
  	Ui::Animations::Simple _toggled;
  	Ui::Animations::Simple _setAnimation;
  	std::unique_ptr<Ui::InfiniteRadialAnimation> _progress;
-@@ -626,16 +682,35 @@ private:
+@@ -626,16 +683,35 @@ private:
  	int rowHeight() const;
  	void refreshProxyForCalls();
  	void refreshProxyRotation();
@@ -202,15 +203,15 @@ index 6d99e31da3..69f6c2333a 100644
 +	QPointer<Ui::FlatLabel> _proxySlowSummary;
 +	QPointer<Ui::SlideWrap<Ui::VerticalLayout>> _proxySlowModeOptionsLayout;
 +	QPointer<Ui::VerticalLayout> _proxySlowModeOptions;
-+	QPointer<Ui::NumberInput> _proxySlowDelayInput;
-+	QPointer<Ui::NumberInput> _proxySlowJitterInput;
++	QPointer<Ui::MaskedInputField> _proxySlowDelayInput;
++	QPointer<Ui::MaskedInputField> _proxySlowJitterInput;
 +	QPointer<Settings::Button> _refreshChecksButton;
 +	rpl::variable<QString> _checksCaption = u"Completed"_q;
 +	bool _proxyCHelloReconnectPending = false;
  	base::unique_qptr<Ui::RpWidget> _noRows;
  	object_ptr<Ui::VerticalLayout> _initialWrap;
  	QPointer<Ui::VerticalLayout> _wrap;
-@@ -746,13 +821,12 @@ void ProxyRow::updateFields(View &&view) {
+@@ -746,13 +822,12 @@ void ProxyRow::updateFields(View &&view) {
  			st::defaultRadio.duration);
  	}
  	_view = std::move(view);
@@ -228,7 +229,7 @@ index 6d99e31da3..69f6c2333a 100644
  		Ui::ItemTextDefaultOptions());
  
  	const auto state = _view.state;
-@@ -786,7 +860,7 @@ void ProxyRow::updateFields(View &&view) {
+@@ -786,7 +861,7 @@ void ProxyRow::updateFields(View &&view) {
  			st::defaultRadio.duration);
  	}
  
@@ -237,7 +238,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	update();
  }
-@@ -797,11 +871,19 @@ void ProxyRow::radialAnimationCallback() {
+@@ -797,11 +872,19 @@ void ProxyRow::radialAnimationCallback() {
  	}
  }
  
@@ -257,7 +258,7 @@ index 6d99e31da3..69f6c2333a 100644
  		+ st::proxyRowPadding.bottom();
  	auto right = st::proxyRowPadding.right();
  	_menuToggle->moveToRight(
-@@ -817,6 +899,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
+@@ -817,6 +900,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
  
  void ProxyRow::paintEvent(QPaintEvent *e) {
  	Painter p(this);
@@ -272,7 +273,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	if (!_view.deleted) {
  		paintRipple(p, 0, 0);
-@@ -830,7 +920,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+@@ -830,7 +921,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
  		p.setOpacity(st::stickersRowDisabledOpacity);
  	}
  
@@ -285,7 +286,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	p.setPen(st::proxyRowTitleFg);
  	p.setFont(st::semiboldFont);
-@@ -850,41 +945,70 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+@@ -850,41 +946,70 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
  			return st::proxyRowStatusFg;
  		}
  	}();
@@ -374,7 +375,7 @@ index 6d99e31da3..69f6c2333a 100644
  	top += st::normalFont->height + st::proxyRowPadding.bottom();
  }
  
-@@ -962,23 +1086,23 @@ void ProxyRow::showMenu() {
+@@ -962,23 +1087,23 @@ void ProxyRow::showMenu() {
  			const style::icon *icon) {
  		return _menu->addAction(text, std::move(callback), icon);
  	};
@@ -403,7 +404,7 @@ index 6d99e31da3..69f6c2333a 100644
  			_deleteClicks.fire({});
  		}, &st::menuIconDelete);
  	}
-@@ -1020,6 +1144,9 @@ ProxiesBox::ProxiesBox(
+@@ -1020,6 +1145,9 @@ ProxiesBox::ProxiesBox(
  	const QString &highlightId)
  : _controller(controller)
  , _settings(settings)
@@ -413,7 +414,7 @@ index 6d99e31da3..69f6c2333a 100644
  , _initialWrap(this)
  , _highlightId(highlightId) {
  	_controller->views(
-@@ -1041,10 +1168,10 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
+@@ -1041,10 +1169,10 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
  }
  
  void ProxiesBox::prepare() {
@@ -427,7 +428,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	setupTopButton();
  	setupContent();
-@@ -1078,13 +1205,13 @@ void ProxiesBox::setupTopButton() {
+@@ -1078,13 +1206,13 @@ void ProxiesBox::setupTopButton() {
  		const auto raw = menu->get();
  		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
  		addAction({
@@ -443,7 +444,7 @@ index 6d99e31da3..69f6c2333a 100644
  				.handler = [=] { _controller->deleteItems(); },
  				.icon = &st::menuIconDeleteAttention,
  				.isAttention = true,
-@@ -1106,13 +1233,16 @@ void ProxiesBox::setupTopButton() {
+@@ -1106,13 +1234,16 @@ void ProxiesBox::setupTopButton() {
  
  void ProxiesBox::setupContent() {
  	const auto inner = setInnerWidget(object_ptr<Ui::VerticalLayout>(this));
@@ -466,7 +467,7 @@ index 6d99e31da3..69f6c2333a 100644
  	_proxySettings
  		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
  			_settings.settings());
-@@ -1121,90 +1251,254 @@ void ProxiesBox::setupContent() {
+@@ -1121,90 +1252,254 @@ void ProxiesBox::setupContent() {
  			inner,
  			_proxySettings,
  			ProxyData::Settings::Disabled,
@@ -628,12 +629,12 @@ index 6d99e31da3..69f6c2333a 100644
 +				row,
 +				title,
 +				st::defaultFlatLabel);
-+			const auto input = Ui::CreateChild<Ui::NumberInput>(
++			const auto input = Ui::CreateChild<Ui::MaskedInputField>(
 +				row,
 +				st::proxySettingsNumberInput,
 +				rpl::single(QString()),
-+				value,
-+				maximum);
++				value);
++			input->setValidator(new QIntValidator(0, maximum, input));
 +			const auto suffix = Ui::CreateChild<Ui::FlatLabel>(
 +				row,
 +				unit,
@@ -776,7 +777,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	_wrap = inner->add(std::move(_initialWrap));
  	inner->add(object_ptr<Ui::FixedHeightWidget>(
-@@ -1218,41 +1512,104 @@ void ProxiesBox::setupContent() {
+@@ -1218,41 +1513,104 @@ void ProxiesBox::setupContent() {
  		}
  		refreshProxyForCalls();
  		refreshProxyRotation();
@@ -892,7 +893,7 @@ index 6d99e31da3..69f6c2333a 100644
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1262,7 +1619,7 @@ void ProxiesBox::setupContent() {
+@@ -1262,7 +1620,7 @@ void ProxiesBox::setupContent() {
  				object_ptr<Ui::VerticalLayout>(inner)));
  		const auto shareList = Settings::AddButtonWithIcon(
  			wrap->entity(),
@@ -901,7 +902,7 @@ index 6d99e31da3..69f6c2333a 100644
  			st::settingsButton,
  			{ &st::menuIconCopy });
  		_shareListButton = shareList;
-@@ -1273,7 +1630,7 @@ void ProxiesBox::setupContent() {
+@@ -1273,7 +1631,7 @@ void ProxiesBox::setupContent() {
  		wrap->finishAnimating();
  	}
  
@@ -910,7 +911,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  	inner->heightValue(
  	) | rpl::map([=](int height) {
-@@ -1284,7 +1641,7 @@ void ProxiesBox::setupContent() {
+@@ -1284,7 +1642,7 @@ void ProxiesBox::setupContent() {
  			st::boxMaxListHeight);
  	}) | rpl::distinct_until_changed(
  	) | rpl::on_next([=](int height) {
@@ -919,7 +920,7 @@ index 6d99e31da3..69f6c2333a 100644
  	}, inner->lifetime());
  }
  
-@@ -1302,14 +1659,100 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1302,14 +1660,100 @@ void ProxiesBox::refreshProxyRotation() {
  	if (!_proxyRotation || !_proxyRotationOptions) {
  		return;
  	}
@@ -1024,7 +1025,7 @@ index 6d99e31da3..69f6c2333a 100644
  }
  
  int ProxiesBox::rowHeight() const {
-@@ -1317,6 +1760,8 @@ int ProxiesBox::rowHeight() const {
+@@ -1317,6 +1761,8 @@ int ProxiesBox::rowHeight() const {
  		+ st::semiboldFont->height
  		+ st::proxyRowSkip
  		+ st::normalFont->height
@@ -1033,7 +1034,7 @@ index 6d99e31da3..69f6c2333a 100644
  		+ st::proxyRowPadding.bottom();
  }
  
-@@ -1339,8 +1784,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1339,8 +1785,7 @@ void ProxiesBox::applyView(View &&view) {
  			? _wrap.data()
  			: _initialWrap.data();
  		const auto &[i, ok] = _rows.emplace(id, nullptr);
@@ -1043,7 +1044,7 @@ index 6d99e31da3..69f6c2333a 100644
  			object_ptr<ProxyRow>(
  				wrap,
  				std::move(view))));
-@@ -1355,6 +1799,18 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1355,6 +1800,18 @@ void ProxiesBox::applyView(View &&view) {
  		i->second->updateFields(std::move(view));
  	}
  	refreshProxyRotation();
@@ -1062,7 +1063,7 @@ index 6d99e31da3..69f6c2333a 100644
  }
  
  void ProxiesBox::createNoRowsLabel() {
-@@ -1364,13 +1820,13 @@ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1821,13 @@ void ProxiesBox::createNoRowsLabel() {
  			rowHeight()),
  		st::proxyEmptyListPadding));
  	_noRows->resize(
@@ -1078,7 +1079,7 @@ index 6d99e31da3..69f6c2333a 100644
  		st::proxyEmptyListLabel);
  	_noRows->widthValue(
  	) | rpl::on_next([=](int width) {
-@@ -1404,7 +1860,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+@@ -1404,7 +1861,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
  
  	button->clicks(
  	) | rpl::on_next([=] {
@@ -1089,7 +1090,7 @@ index 6d99e31da3..69f6c2333a 100644
  	}, button->lifetime());
  }
  
-@@ -1714,9 +2172,6 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1714,9 +2173,6 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  		}
  	}, _lifetime);
  
@@ -1506,7 +1507,7 @@ index 6d99e31da3..69f6c2333a 100644
  
  void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
-index 5de98bc663..7268cb6677 100644
+index 5de98bc663..43dcfb69ed 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
 @@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1536,7 +1537,7 @@ index 5de98bc663..7268cb6677 100644
  	};
  	struct ItemView {
  		int id = 0;
-@@ -67,6 +69,7 @@ public:
+@@ -67,11 +69,12 @@ public:
  		QString host;
  		uint32 port = 0;
  		int ping = 0;
@@ -1544,6 +1545,12 @@ index 5de98bc663..7268cb6677 100644
  		bool selected = false;
  		bool deleted = false;
  		bool supportsShare = false;
+ 		bool supportsCalls = false;
+-		ItemState state = ItemState::Checking;
++		ItemState state = ItemState::Inactive;
+ 
+ 	};
+ 
 @@ -84,11 +87,22 @@ public:
  	object_ptr<Ui::BoxContent> editItemBox(int id);
  	object_ptr<Ui::BoxContent> addNewItemBox();
@@ -1579,7 +1586,8 @@ index 5de98bc663..7268cb6677 100644
 -		Checker checker;
 -		Checker checkerv6;
 +		MTP::ProxyCheckHandlePointer checker;
- 		ItemState state = ItemState::Checking;
+-		ItemState state = ItemState::Checking;
++		ItemState state = ItemState::Inactive;
  		int ping = 0;
 +		QString checkedAt;
 +		bool batchCheck = false;
