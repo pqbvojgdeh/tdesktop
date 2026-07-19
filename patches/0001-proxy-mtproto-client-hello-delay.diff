@@ -2311,10 +2311,10 @@ index 571e14eb38..a6e242556b 100644
  	_timeoutTimer.cancel();
  	if (_ipIndex >= 0) {
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a556..d1257e4b00 100644
+index 448190a556..81f83a1e9e 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -8,20 +8,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -8,20 +8,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "mtproto/details/mtproto_tls_socket.h"
  
  #include "mtproto/details/mtproto_tcp_socket.h"
@@ -2328,6 +2328,7 @@ index 448190a556..d1257e4b00 100644
 +#include <chrono>
 +#include <thread>
 +#include <map>
++#include <tuple>
  
  #include <QtCore/QtEndian>
 +#include <QtCore/QMutex>
@@ -2345,7 +2346,7 @@ index 448190a556..d1257e4b00 100644
  constexpr auto kHelloDigestLength = 32;
  constexpr auto kLengthSize = sizeof(uint16);
  constexpr auto kMaxServerHelloLength = 65536;
-@@ -36,7 +45,7 @@ const auto kClientHeader = qstr("\x17\x03\x03");
+@@ -36,7 +46,7 @@ const auto kClientHeader = qstr("\x17\x03\x03");
  using BigNum = openssl::BigNum;
  using BigNumContext = openssl::Context;
  
@@ -2354,7 +2355,7 @@ index 448190a556..d1257e4b00 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -231,6 +240,938 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +241,972 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -3176,8 +3177,104 @@ index 448190a556..d1257e4b00 100644
 +	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
 +}
 +
-+[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules(const QString &address, int port)
-+{
++using Chromium150EndpointKey = std::tuple<QString, int, QByteArray>;
++
++struct Chromium150EndpointState {
++	std::chrono::steady_clock::time_point expiresAt;
++	std::chrono::minutes ttl;
++	int tickets = 0;
++};
++
++struct ClientHelloSelection {
++	const MTPTlsClientHello *rules = nullptr;
++	ProxyData::CHelloType configured = ProxyData::CHelloType::Chromium150;
++	ProxyData::CHelloType actual = ProxyData::CHelloType::Chromium150;
++	bool resumed = false;
++};
++
++constexpr auto kMaximumChromium150EndpointStates = 128;
++constexpr auto kChromium150TicketSlots = 2;
++QMutex Chromium150Mutex;
++std::map<Chromium150EndpointKey, Chromium150EndpointState> Chromium150Endpoints;
++
++void PruneChromium150Endpoints(std::chrono::steady_clock::time_point now) {
++	for (auto i = Chromium150Endpoints.begin(); i != Chromium150Endpoints.end();) {
++		i = (i->second.expiresAt <= now)
++			? Chromium150Endpoints.erase(i)
++			: std::next(i);
++	}
++}
++
++[[nodiscard]] bool TakeChromium150Ticket(
++		const Chromium150EndpointKey &key) {
++	const QMutexLocker lock(&Chromium150Mutex);
++	const auto now = std::chrono::steady_clock::now();
++	PruneChromium150Endpoints(now);
++	const auto i = Chromium150Endpoints.find(key);
++	if (i == end(Chromium150Endpoints) || i->second.tickets <= 0) {
++		return false;
++	}
++	--i->second.tickets;
++	return true;
++}
++
++void ConfirmClientHello(
++		const QString &address,
++		int port,
++		const QByteArray &domain,
++		ProxyData::CHelloType configured,
++		ProxyData::CHelloType actual,
++		bool resumed) {
++	auto ttlMinutes = 0;
++	if (actual == ProxyData::CHelloType::Chromium150) {
++		const auto key = Chromium150EndpointKey(address, port, domain);
++		const QMutexLocker lock(&Chromium150Mutex);
++		const auto now = std::chrono::steady_clock::now();
++		PruneChromium150Endpoints(now);
++		if (!Chromium150Endpoints.contains(key)
++			&& Chromium150Endpoints.size()
++				>= kMaximumChromium150EndpointStates) {
++			const auto oldest = std::min_element(
++				begin(Chromium150Endpoints),
++				end(Chromium150Endpoints),
++				[](const auto &a, const auto &b) {
++					return a.second.expiresAt < b.second.expiresAt;
++				});
++			if (oldest != end(Chromium150Endpoints)) {
++				Chromium150Endpoints.erase(oldest);
++			}
++		}
++		auto &state = Chromium150Endpoints[key];
++		if (state.ttl.count() <= 0) {
++			state.ttl = std::chrono::minutes(
++				30 + QRandomGenerator::global()->bounded(31));
++		}
++		state.expiresAt = now + state.ttl;
++		state.tickets = kChromium150TicketSlots;
++		ttlMinutes = int(state.ttl.count());
++	}
++
++	auto status = ProxyData::CHelloStatus();
++	status.configured = configured;
++	status.actual = actual;
++	status.host = address;
++	status.port = port;
++	status.endpoint = address.contains(':')
++		? u"[%1]:%2"_q.arg(address).arg(port)
++		: u"%1:%2"_q.arg(address).arg(port);
++	status.random = (configured == ProxyData::CHelloType::RANDOM);
++	status.chromium150 = (actual == ProxyData::CHelloType::Chromium150);
++	status.resumed = resumed;
++	status.ttlMinutes = ttlMinutes;
++	status.ttlLeftMinutes = ttlMinutes;
++	status.used = true;
++	ProxyData::setGlobalCHelloStatus(status);
++}
++
++[[nodiscard]] ClientHelloSelection PrepareClientHelloRules(
++		const QString &address,
++		int port,
++		const QByteArray &domain) {
 +	static MTPTlsClientHello chRules_chrome  = PrepareClientHelloRules_Chrome();
 +	static MTPTlsClientHello chRules_firefox = PrepareClientHelloRules_Firefox();
 +	static MTPTlsClientHello chRules_custom  = PrepareClientHelloRules_Firefox(true);
@@ -3185,115 +3282,53 @@ index 448190a556..d1257e4b00 100644
 +	static MTPTlsClientHello chRules_yandex  = PrepareClientHelloRules_YandexGost();
 +	static MTPTlsClientHello chRules_chromium150Fresh = PrepareClientHelloRules_Chromium150(false);
 +	static MTPTlsClientHello chRules_chromium150Resumed = PrepareClientHelloRules_Chromium150(true);
-+	static QMutex chromium150Mutex;
-+	constexpr auto kMaximumChromium150EndpointStates = 128;
-+	struct Chromium150EndpointState {
-+		std::chrono::steady_clock::time_point seenAt;
-+		std::chrono::minutes ttl;
-+	};
-+	static auto chromium150SeenByEndpoint = std::map<std::pair<QString, int>, Chromium150EndpointState>();
 +	const auto configured_ch_type = MTP::ProxyData::globalClientHelloRulesType();
 +	auto ch_type = configured_ch_type;
 +	if (ProxyData::CHelloType::RANDOM == ch_type) {
 +		// qDebug("--- randomize ClientHello selection");
 +		ch_type = Core::IntToProxyCHelloType(QRandomGenerator::global()->bounded(0, 6));
 +	}
-+	const auto saveStatus = [&](ProxyData::CHelloType actual_ch_type, bool resumed = false, int ttlMinutes = 0, int ttlLeftMinutes = 0) {
-+		auto status = MTP::ProxyData::CHelloStatus();
-+		status.configured = configured_ch_type;
-+		status.actual = actual_ch_type;
-+		status.host = address;
-+		status.port = port;
-+		status.endpoint = address.contains(':')
-+			? u"[%1]:%2"_q.arg(address).arg(port)
-+			: u"%1:%2"_q.arg(address).arg(port);
-+		status.random = (configured_ch_type == ProxyData::CHelloType::RANDOM);
-+		status.chromium150 = (actual_ch_type == ProxyData::CHelloType::Chromium150);
-+		status.resumed = resumed;
-+		status.ttlMinutes = ttlMinutes;
-+		status.ttlLeftMinutes = ttlLeftMinutes;
-+		status.used = true;
-+		MTP::ProxyData::setGlobalCHelloStatus(status);
++	const auto result = [&](
++			const MTPTlsClientHello &rules,
++			ProxyData::CHelloType actual,
++			bool resumed = false) {
++		return ClientHelloSelection{
++			.rules = &rules,
++			.configured = configured_ch_type,
++			.actual = actual,
++			.resumed = resumed,
++		};
 +	};
 +	switch(ch_type) {
 +		case ProxyData::CHelloType::Chrome:
 +			// qDebug(">>> using Chrome ClientHello");
-+			saveStatus(ch_type);
-+			return chRules_chrome;
++			return result(chRules_chrome, ch_type);
 +		case ProxyData::CHelloType::Custom:
 +			// qDebug(">>> using custom ClientHello");
-+			saveStatus(ch_type);
-+			return chRules_custom;
++			return result(chRules_custom, ch_type);
 +		case ProxyData::CHelloType::SafariMac:
-+			saveStatus(ch_type);
-+			return chRules_safari;
++			return result(chRules_safari, ch_type);
 +		case ProxyData::CHelloType::YandexGost:
-+			saveStatus(ch_type);
-+			return chRules_yandex;
++			return result(chRules_yandex, ch_type);
 +		case ProxyData::CHelloType::Chromium150: {
-+			int ttlMinutes = 0;
-+			int ttlLeftMinutes = 0;
-+			const auto resumed = [&] {
-+				namespace sc = std::chrono;
-+				const QMutexLocker lock(&chromium150Mutex);
-+				const auto now = sc::steady_clock::now();
-+				for (auto i = chromium150SeenByEndpoint.begin();
-+						i != chromium150SeenByEndpoint.end();) {
-+					const auto &old = i->second;
-+					const auto expired = old.seenAt.time_since_epoch().count()
-+						&& (now - old.seenAt >= old.ttl + sc::hours(1));
-+					i = expired
-+						? chromium150SeenByEndpoint.erase(i)
-+						: std::next(i);
-+				}
-+				const auto key = std::pair(address, port);
-+				if (!chromium150SeenByEndpoint.contains(key)
-+					&& chromium150SeenByEndpoint.size()
-+						>= kMaximumChromium150EndpointStates) {
-+					const auto oldest = std::min_element(
-+						begin(chromium150SeenByEndpoint),
-+						end(chromium150SeenByEndpoint),
-+						[](const auto &a, const auto &b) {
-+							return a.second.seenAt < b.second.seenAt;
-+						});
-+					if (oldest != end(chromium150SeenByEndpoint)) {
-+						chromium150SeenByEndpoint.erase(oldest);
-+					}
-+				}
-+				auto &state = chromium150SeenByEndpoint[key];
-+				const auto result = state.seenAt.time_since_epoch().count() != 0
-+					&& now - state.seenAt < state.ttl;
-+				if (!result) {
-+					state.ttl = sc::minutes(30 + QRandomGenerator::global()->bounded(31));
-+					state.seenAt = now;
-+				}
-+				ttlMinutes = int(state.ttl.count());
-+				const auto elapsed = result
-+					? int(sc::duration_cast<sc::minutes>(now - state.seenAt).count())
-+					: 0;
-+				ttlLeftMinutes = ttlMinutes - elapsed;
-+				if (ttlLeftMinutes < 0) {
-+					ttlLeftMinutes = 0;
-+				}
-+				return result;
-+			}();
-+			saveStatus(ch_type, resumed, ttlMinutes, ttlLeftMinutes);
-+			return resumed
-+				? chRules_chromium150Resumed
-+				: chRules_chromium150Fresh;
++			const auto resumed = TakeChromium150Ticket(
++				Chromium150EndpointKey(address, port, domain));
++			return result(
++				resumed ? chRules_chromium150Resumed : chRules_chromium150Fresh,
++				ch_type,
++				resumed);
 +		}
 +		case ProxyData::CHelloType::Firefox:
 +		default:
 +			// qDebug(">>> using FireFox ClientHello");
-+			saveStatus(ProxyData::CHelloType::Firefox);
-+			return chRules_firefox;
++			return result(chRules_firefox, ProxyData::CHelloType::Firefox);
 +	}
 +}
 +
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -271,7 +1212,9 @@ using BigNumContext = openssl::Context;
+@@ -271,7 +1247,9 @@ using BigNumContext = openssl::Context;
  	if (!EVP_PKEY_get_raw_public_key(key, nullptr, &length)) {
  		return {};
  	}
@@ -3304,7 +3339,7 @@ index 448190a556..d1257e4b00 100644
  
  	auto result = bytes::vector(length);
  	const auto code = EVP_PKEY_get_raw_public_key(
-@@ -281,6 +1224,9 @@ using BigNumContext = openssl::Context;
+@@ -281,6 +1259,9 @@ using BigNumContext = openssl::Context;
  	if (!code) {
  		return {};
  	}
@@ -3314,7 +3349,7 @@ index 448190a556..d1257e4b00 100644
  	return result;
  }
  
-@@ -304,7 +1250,7 @@ private:
+@@ -304,7 +1285,7 @@ private:
  			bytes::const_span domain,
  			const bytes::vector &greases);
  
@@ -3323,7 +3358,7 @@ index 448190a556..d1257e4b00 100644
  		void writeBlocks(const QVector<MTPTlsBlock> &blocks);
  		void writeBlock(const MTPTlsBlock &data);
  		void writeBlock(const MTPDtlsBlockString &data);
-@@ -362,16 +1308,16 @@ QByteArray Generator::Part::take() {
+@@ -362,16 +1343,16 @@ QByteArray Generator::Part::take() {
  	return _error ? QByteArray() : std::move(_result);
  }
  
@@ -3344,7 +3379,7 @@ index 448190a556..d1257e4b00 100644
  	return bytes::make_detached_span(_result).subspan(offset);
  }
  
-@@ -411,7 +1357,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
+@@ -411,7 +1392,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
  
  void Generator::Part::writeBlock(const MTPDtlsBlockGrease &data) {
  	const auto seed = data.vseed().v;
@@ -3353,7 +3388,7 @@ index 448190a556..d1257e4b00 100644
  		_error = true;
  		return;
  	}
-@@ -494,10 +1440,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
+@@ -494,10 +1475,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
  	bytes::set_random(random);
  
  	auto chars = reinterpret_cast<char*>(storage.data());
@@ -3369,7 +3404,7 @@ index 448190a556..d1257e4b00 100644
  		*chars++ = (char)(a & 255);
  		*chars++ = (char)((a >> 8) + ((b & 15) << 4));
  		*chars++ = (char)(b >> 4);
-@@ -523,7 +1471,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
+@@ -523,7 +1506,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
  void Generator::Part::finalize(bytes::const_span key) {
  	if (_error) {
  		return;
@@ -3379,7 +3414,7 @@ index 448190a556..d1257e4b00 100644
  		_error = true;
  		return;
  	}
-@@ -532,7 +1481,8 @@ void Generator::Part::finalize(bytes::const_span key) {
+@@ -532,7 +1516,8 @@ void Generator::Part::finalize(bytes::const_span key) {
  }
  
  QByteArray Generator::Part::extractDigest() const {
@@ -3389,16 +3424,40 @@ index 448190a556..d1257e4b00 100644
  		return {};
  	}
  	return _result.mid(_digestPosition, kHelloDigestLength);
-@@ -653,7 +1603,7 @@ void TlsSocket::plainConnected() {
+@@ -653,10 +1638,21 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
 -	static const auto kClientHelloRules = PrepareClientHelloRules();
-+	const auto& kClientHelloRules = PrepareClientHelloRules(_address, _port);
++	const auto domain = domainFromSecret();
++	const auto domainBytes = QByteArray(
++		reinterpret_cast<const char*>(domain.data()),
++		int(domain.size()));
++	const auto selection = PrepareClientHelloRules(
++		_address,
++		_port,
++		domainBytes);
++	_clientHelloConfigured = int(selection.configured);
++	_clientHelloActual = int(selection.actual);
++	_clientHelloAttempted = true;
++	_clientHelloResumed = selection.resumed;
  	const auto hello = PrepareClientHello(
- 		kClientHelloRules,
- 		domainFromSecret(),
-@@ -699,6 +1649,11 @@ void TlsSocket::readHello() {
+-		kClientHelloRules,
+-		domainFromSecret(),
++		*selection.rules,
++		domain,
+ 		keyFromSecret());
+ 	if (hello.data.isEmpty()) {
+ 		logError(888, "Could not generate Client Hello.");
+@@ -671,6 +1667,7 @@ void TlsSocket::plainConnected() {
+ 
+ void TlsSocket::plainDisconnected() {
+ 	_state = State::NotConnected;
++	_clientHelloAttempted = false;
+ 	_incoming = QByteArray();
+ 	_serverHelloLength = 0;
+ 	_incomingGoodDataOffset = 0;
+@@ -699,6 +1696,11 @@ void TlsSocket::readHello() {
  			return;
  		}
  		_incoming.append(_socket.readAll());
@@ -3410,7 +3469,27 @@ index 448190a556..d1257e4b00 100644
  	}
  	checkHelloParts12(parts1Size);
  }
-@@ -854,6 +1809,51 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -794,6 +1796,19 @@ void TlsSocket::checkHelloDigest() {
+ 	}
+ 	_incomingGoodDataOffset = _incomingGoodDataLimit = 0;
+ 	_state = State::Connected;
++	if (_clientHelloAttempted) {
++		const auto domain = domainFromSecret();
++		ConfirmClientHello(
++			_address,
++			_port,
++			QByteArray(
++				reinterpret_cast<const char*>(domain.data()),
++				int(domain.size())),
++			ProxyData::CHelloType(_clientHelloConfigured),
++			ProxyData::CHelloType(_clientHelloActual),
++			_clientHelloResumed);
++		_clientHelloAttempted = false;
++	}
+ 	_connected.fire({});
+ }
+ 
+@@ -854,6 +1869,51 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -3462,11 +3541,19 @@ index 448190a556..d1257e4b00 100644
  	_socket.connectToHost(address, port);
  }
  
+@@ -954,6 +2014,7 @@ void TlsSocket::handleError(int errorCode) {
+ 		logError(errorCode, _socket.errorString());
+ 	}
+ 	_state = State::Error;
++	_clientHelloAttempted = false;
+ 	_error.fire({});
+ }
+ 
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index d4a90083ea..da3934d748 100644
+index d4a90083ea..908f26dc3f 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-@@ -57,6 +57,8 @@ private:
+@@ -57,11 +57,17 @@ private:
  
  	const bytes::vector _secret;
  	QTcpSocket _socket;
@@ -3475,6 +3562,15 @@ index d4a90083ea..da3934d748 100644
  	State _state = State::NotConnected;
  	QByteArray _incoming;
  	int _incomingGoodDataOffset = 0;
+ 	int _incomingGoodDataLimit = 0;
+ 	int _serverHelloLength = 0;
++	int _clientHelloConfigured = 0;
++	int _clientHelloActual = 0;
++	bool _clientHelloAttempted = false;
++	bool _clientHelloResumed = false;
+ 
+ };
+ 
 diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
 index a7dd178b71..30920d1333 100644
 --- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
