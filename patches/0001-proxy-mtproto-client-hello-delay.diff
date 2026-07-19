@@ -1374,7 +1374,7 @@ index 6d99e31da3..69f6c2333a 100644
 +	if (!_settings.isEnabled()) {
 +		return false;
 +	}
-+	if (value < 1 || value > Core::SettingsProxy::kMaximumTimingValue) {
++	if (value < 0 || value > Core::SettingsProxy::kMaximumTimingValue) {
 +		return false;
 +	}
 +	if (_settings.proxySlowDelay() == value) {
@@ -1857,7 +1857,7 @@ index 495bb0b846..fde70d79b1 100644
 +}
 +
 +void SettingsProxy::setProxySlowDelay(int value) {
-+	_proxySlowDelay = std::clamp(value, 1, kMaximumTimingValue);
++	_proxySlowDelay = std::clamp(value, 0, kMaximumTimingValue);
 +}
 +
 +int SettingsProxy::proxySlowJitter() const {
@@ -3498,7 +3498,7 @@ index 448190a556..81f83a1e9e 100644
 +		namespace sc = std::chrono;
 +		static QMutex mutex;
 +		static auto slots = std::map<std::pair<QString, int>, sc::steady_clock::time_point>{};
-+		const auto delay = qMax(1, MTP::ProxyData::globalSlowDelay());
++		const auto delay = qMax(0, MTP::ProxyData::globalSlowDelay());
 +		const auto jitter = qMax(0, MTP::ProxyData::globalSlowJitter());
 +
 +		sc::milliseconds waitFor{0};
@@ -3734,7 +3734,7 @@ index f1f2c5402f..e72021980f 100644
 +
 +void ProxyData::setGlobalSlowDelay(int value) {
 +	global_slow_delay.store(
-+		std::clamp(value, 1, kMaximumSlowTimingValue),
++		std::clamp(value, 0, kMaximumSlowTimingValue),
 +		std::memory_order_relaxed);
 +}
 +
