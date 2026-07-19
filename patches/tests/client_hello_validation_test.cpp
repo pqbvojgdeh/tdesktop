@@ -46,14 +46,14 @@ void Extension(Bytes &to, unsigned type, const Bytes &content) {
 	to.insert(to.end(), content.begin(), content.end());
 }
 
-[[nodiscard]] Bytes MakeKeyShares(bool validP256) {
+[[nodiscard]] Bytes MakeKeyShares(bool validP256Encoding) {
 	auto entries = Bytes();
 	U16(entries, 0x001D);
 	U16(entries, 32);
 	Zeros(entries, 32);
 	U16(entries, 0x0017);
 	U16(entries, 65);
-	Byte(entries, validP256 ? 0x04 : 0x03);
+	Byte(entries, validP256Encoding ? 0x04 : 0x03);
 	Zeros(entries, 64);
 	auto result = Bytes();
 	U16(result, entries.size());
@@ -75,10 +75,14 @@ void Extension(Bytes &to, unsigned type, const Bytes &content) {
 
 [[nodiscard]] Bytes MakeHello(
 		bool resumed,
-		bool validP256 = true,
-		bool extensionAfterPsk = false) {
+		bool validP256Encoding = true,
+		bool extensionAfterPsk = false,
+		bool emptyKeyShares = false) {
 	auto extensions = Bytes();
-	Extension(extensions, 0x0033, MakeKeyShares(validP256));
+	auto keyShares = emptyKeyShares
+		? Bytes{ std::byte(0), std::byte(0) }
+		: MakeKeyShares(validP256Encoding);
+	Extension(extensions, 0x0033, keyShares);
 	if (resumed) {
 		Extension(extensions, 0x0029, MakePsk());
 	}
@@ -142,6 +146,8 @@ int main() {
 		"A mismatched TLS record length must fail.");
 	Expect(!Validate(MakeHello(false, false), 0).valid,
 		"A P-256 share without uncompressed-point encoding must fail.");
+	Expect(!Validate(MakeHello(false, true, false, true), 0).valid,
+		"An empty key-share list must fail.");
 	Expect(!Validate(MakeHello(true, true, true), 1).valid,
 		"The pre-shared-key extension must be last.");
 

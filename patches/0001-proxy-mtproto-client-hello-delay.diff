@@ -2553,10 +2553,10 @@ index 0000000000..53de70565e
 +} // namespace MTP::details
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
 new file mode 100644
-index 0000000000..fcbe4bfc90
+index 0000000000..2b5d313339
 --- /dev/null
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,166 @@
 +#pragma once
 +
 +#include <cstddef>
@@ -2649,6 +2649,7 @@ index 0000000000..fcbe4bfc90
 +				return result;
 +			}
 +			auto share = offset + 2;
++			auto shareCount = 0;
 +			while (share < extensionEnd) {
 +				if (share + 4 > extensionEnd) {
 +					return result;
@@ -2671,6 +2672,10 @@ index 0000000000..fcbe4bfc90
 +				}
 +				result.hasP256KeyShare |= (group == 0x0017);
 +				share += shareLength;
++				++shareCount;
++			}
++			if (!shareCount) {
++				return result;
 +			}
 +			result.hasKeyShare = true;
 +		} else if (type == 0x0029) {
@@ -4169,7 +4174,7 @@ index a7dd178b71..30920d1333 100644
  		const auto i = ranges::remove_if(current, [&](const QString &ip) {
  			const auto index = copy.indexOf(ip);
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c5402f..694bcecda6 100644
+index f1f2c5402f..3312743765 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 @@ -7,12 +7,45 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -4239,12 +4244,11 @@ index f1f2c5402f..694bcecda6 100644
  		&& !qthelp::is_ipv6(host)
  		&& !RegExp.match(host).hasMatch();
  }
-@@ -245,4 +281,156 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
+@@ -245,4 +281,157 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
  		proxy.password);
  }
  
 +std::atomic<ProxyData::CHelloType> ProxyData::global_ch_type = ProxyData::CHelloType::Chromium150;
-+ProxyData::CHelloStatus ProxyData::global_ch_status;
 +std::atomic<bool> ProxyData::global_slow_mode = false;
 +std::atomic<int> ProxyData::global_slow_delay = 250;
 +std::atomic<int> ProxyData::global_slow_jitter = 150;
@@ -4260,7 +4264,6 @@ index f1f2c5402f..694bcecda6 100644
 +
 +void ProxyData::setGlobalCHelloStatus(const ProxyData::CHelloStatus &status) {
 +	const QMutexLocker lock(&CHelloStatusMutex);
-+	global_ch_status = status;
 +	const auto sameEndpoint = [&](const StoredCHelloStatus &entry) {
 +		return entry.value.port == status.port
 +			&& !entry.value.host.compare(status.host, Qt::CaseInsensitive)
@@ -4305,13 +4308,7 @@ index f1f2c5402f..694bcecda6 100644
 +
 +void ProxyData::clearGlobalCHelloStatuses() {
 +	const QMutexLocker lock(&CHelloStatusMutex);
-+	global_ch_status = CHelloStatus();
 +	CHelloStatuses.clear();
-+}
-+
-+ProxyData::CHelloStatus ProxyData::globalCHelloStatus() {
-+	const QMutexLocker lock(&CHelloStatusMutex);
-+	return global_ch_status;
 +}
 +
 +void ProxyData::setGlobalSlowMode(bool value) {
@@ -4335,14 +4332,23 @@ index f1f2c5402f..694bcecda6 100644
 +			end(proxy.resolvedIPs),
 +			isHost);
 +	};
-+	const auto i = ranges::find_if(CHelloStatuses, matches);
-+	if (i == end(CHelloStatuses)) {
++	const auto newest = [&] {
++		auto result = (const StoredCHelloStatus*)nullptr;
++		for (const auto &entry : CHelloStatuses) {
++			if (matches(entry)
++				&& (!result || entry.updatedAt >= result->updatedAt)) {
++				result = &entry;
++			}
++		}
++		return result;
++	}();
++	if (!newest) {
 +		return CHelloStatus();
 +	}
-+	auto result = i->value;
++	auto result = newest->value;
 +	if (result.chromium150 && result.ttlLeftMinutes > 0) {
 +		const auto elapsedMinutes = std::clamp(
-+			(crl::now() - i->updatedAt) / crl::time(60 * 1000),
++			(crl::now() - newest->updatedAt) / crl::time(60 * 1000),
 +			crl::time(0),
 +			crl::time(result.ttlLeftMinutes));
 +		result.ttlLeftMinutes = std::max(
@@ -4397,7 +4403,7 @@ index f1f2c5402f..694bcecda6 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f523..4732315ee5 100644
+index 367ee3f523..fac07439ff 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -4440,7 +4446,7 @@ index 367ee3f523..4732315ee5 100644
  
  	Type type = Type::None;
  	QString host;
-@@ -51,6 +77,43 @@ struct ProxyData {
+@@ -51,6 +77,41 @@ struct ProxyData {
  	[[nodiscard]] static Status MtprotoPasswordStatus(
  		const QString &password);
  
@@ -4454,7 +4460,6 @@ index 367ee3f523..4732315ee5 100644
 +		const QByteArray &domainId,
 +		int ttlMinutes);
 +	static void clearGlobalCHelloStatuses();
-+	[[nodiscard]] static ProxyData::CHelloStatus globalCHelloStatus();
 +	[[nodiscard]] static ProxyData::CHelloStatus globalCHelloStatus(
 +		const ProxyData &proxy);
 +
@@ -4476,7 +4481,6 @@ index 367ee3f523..4732315ee5 100644
 +
 +private:
 +	static std::atomic<ProxyData::CHelloType> global_ch_type;
-+	static ProxyData::CHelloStatus global_ch_status;
 +	static std::atomic<bool> global_slow_mode;
 +	static std::atomic<int> global_slow_delay;
 +	static std::atomic<int> global_slow_jitter;
