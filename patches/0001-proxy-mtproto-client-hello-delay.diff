@@ -48,7 +48,7 @@ index 3e51338c13..a3f1c5fbc1 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da3..ccfa12c4af 100644
+index 6d99e31da3..04808aca1e 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -59,30 +59,84 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -525,7 +525,7 @@ index 6d99e31da3..ccfa12c4af 100644
 +	const auto clientMenu = _proxyCHelloButton->lifetime().make_state<
 +		base::unique_qptr<Ui::PopupMenu>>();
 +	_proxyCHelloButton->addClickHandler([=] {
-+		if (_proxySettings->current() != ProxyData::Settings::Enabled) {
++		if (!_settings.isEnabled()) {
 +			return;
 +		}
 +		*clientMenu = base::make_unique_q<Ui::PopupMenu>(
@@ -771,7 +771,7 @@ index 6d99e31da3..ccfa12c4af 100644
 +		_checksCaption.value(),
 +		st::settingsButtonNoIcon);
 +	_refreshChecksButton->addClickHandler([=] {
-+		if (_proxySettings->current() == ProxyData::Settings::Enabled) {
++		if (_settings.isEnabled()) {
 +			_controller->refreshAllChecks();
 +		}
 +	});
@@ -787,7 +787,7 @@ index 6d99e31da3..ccfa12c4af 100644
 -	_tryIPv6->checkedChanges(
 +	_proxySlowMode->toggledChanges(
 +	) | rpl::on_next([=](bool checked) {
-+		if (_proxySettings->current() != ProxyData::Settings::Enabled) {
++		if (!_settings.isEnabled()) {
 +			_proxySlowModeValue = _settings.proxySlowMode();
 +			return;
 +		}
@@ -800,12 +800,12 @@ index 6d99e31da3..ccfa12c4af 100644
  	) | rpl::on_next([=](bool checked) {
 -		_controller->setTryIPv6(checked);
 -	}, _tryIPv6->lifetime());
-+		if (_proxySettings->current() == ProxyData::Settings::Enabled) {
++		if (_settings.isEnabled()) {
 +			_controller->setProxyPreferIPv6(checked);
 +		}
 +	}, _proxyAddressPriorityButton->lifetime());
 +	connect(_proxySlowDelayInput, &Ui::MaskedInputField::changed, [=] {
-+		if (_proxySettings->current() != ProxyData::Settings::Enabled) {
++		if (!_settings.isEnabled()) {
 +			return;
 +		}
 +		auto ok = false;
@@ -816,7 +816,7 @@ index 6d99e31da3..ccfa12c4af 100644
 +	});
 +
 +	connect(_proxySlowJitterInput, &Ui::MaskedInputField::changed, [=] {
-+		if (_proxySettings->current() != ProxyData::Settings::Enabled) {
++		if (!_settings.isEnabled()) {
 +			return;
 +		}
 +		auto ok = false;
@@ -839,14 +839,14 @@ index 6d99e31da3..ccfa12c4af 100644
 +	_proxyForCalls->entity()->toggledChanges(
  	) | rpl::on_next([=](bool checked) {
 -		_controller->setProxyForCalls(checked);
-+		if (_proxySettings->current() == ProxyData::Settings::Enabled) {
++		if (_settings.isEnabled()) {
 +			_controller->setProxyForCalls(checked);
 +		}
  	}, _proxyForCalls->lifetime());
 -	_proxyRotation->entity()->checkedChanges(
 +	_proxyRotation->entity()->toggledChanges(
  	) | rpl::on_next([=](bool checked) {
-+		if (_proxySettings->current() != ProxyData::Settings::Enabled) {
++		if (!_settings.isEnabled()) {
 +			_proxyRotationValue = _settings.proxyRotationEnabled();
 +			return;
 +		}
@@ -863,7 +863,7 @@ index 6d99e31da3..ccfa12c4af 100644
 +		_proxyRotationTimeoutInput,
 +		&Ui::MaskedInputField::changed,
 +		[=] {
-+			if (_proxySettings->current() != ProxyData::Settings::Enabled) {
++			if (!_settings.isEnabled()) {
 +				return;
 +			}
 +			auto ok = false;
@@ -928,15 +928,24 @@ index 6d99e31da3..ccfa12c4af 100644
  	}, inner->lifetime());
  }
  
-@@ -1302,14 +1668,100 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1293,8 +1659,7 @@ void ProxiesBox::refreshProxyForCalls() {
+ 		return;
+ 	}
+ 	_proxyForCalls->toggle(
+-		(_proxySettings->current() == ProxyData::Settings::Enabled
+-			&& _currentProxySupportsCallsId != 0),
++		(_currentProxySupportsCallsId != 0),
+ 		anim::type::normal);
+ }
+ 
+@@ -1302,14 +1667,98 @@ void ProxiesBox::refreshProxyRotation() {
  	if (!_proxyRotation || !_proxyRotationOptions) {
  		return;
  	}
 -	const auto visible = (_proxySettings->current()
 -			== ProxyData::Settings::Enabled)
 -		&& _settings.selected()
-+	const auto custom = (_proxySettings->current()
-+		== ProxyData::Settings::Enabled);
++	const auto custom = _settings.isEnabled();
 +	const auto visible = _settings.selected()
  		&& (_settings.list().size() > 1);
  	_proxyRotation->toggle(visible, anim::type::normal);
@@ -954,7 +963,7 @@ index 6d99e31da3..ccfa12c4af 100644
 +	}
 +	_proxySlowModeOptionsLayout->toggle(true, anim::type::normal);
 +	const auto active = _proxySlowMode->toggled()
-+		&& (_proxySettings->current() == ProxyData::Settings::Enabled)
++		&& _settings.isEnabled()
 +		&& _controller->selectedUsesFakeTls();
 +	_proxySlowModeOptions->setDisabled(!active);
 +}
@@ -986,8 +995,7 @@ index 6d99e31da3..ccfa12c4af 100644
 +	if (!_proxySettings) {
 +		return;
 +	}
-+	const auto custom = (_proxySettings->current()
-+		== ProxyData::Settings::Enabled);
++	const auto custom = _settings.isEnabled();
 +	const auto fakeTls = _controller->selectedUsesFakeTls();
 +	if (_proxyAddressPriorityButton) {
 +		_proxyAddressPriorityButton->setDisabled(
@@ -1033,7 +1041,7 @@ index 6d99e31da3..ccfa12c4af 100644
  }
  
  int ProxiesBox::rowHeight() const {
-@@ -1317,6 +1769,8 @@ int ProxiesBox::rowHeight() const {
+@@ -1317,6 +1766,8 @@ int ProxiesBox::rowHeight() const {
  		+ st::semiboldFont->height
  		+ st::proxyRowSkip
  		+ st::normalFont->height
@@ -1042,7 +1050,7 @@ index 6d99e31da3..ccfa12c4af 100644
  		+ st::proxyRowPadding.bottom();
  }
  
-@@ -1339,8 +1793,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1339,8 +1790,7 @@ void ProxiesBox::applyView(View &&view) {
  			? _wrap.data()
  			: _initialWrap.data();
  		const auto &[i, ok] = _rows.emplace(id, nullptr);
@@ -1052,7 +1060,7 @@ index 6d99e31da3..ccfa12c4af 100644
  			object_ptr<ProxyRow>(
  				wrap,
  				std::move(view))));
-@@ -1355,6 +1808,18 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1355,6 +1805,18 @@ void ProxiesBox::applyView(View &&view) {
  		i->second->updateFields(std::move(view));
  	}
  	refreshProxyRotation();
@@ -1071,7 +1079,7 @@ index 6d99e31da3..ccfa12c4af 100644
  }
  
  void ProxiesBox::createNoRowsLabel() {
-@@ -1364,13 +1829,13 @@ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1826,13 @@ void ProxiesBox::createNoRowsLabel() {
  			rowHeight()),
  		st::proxyEmptyListPadding));
  	_noRows->resize(
@@ -1087,18 +1095,18 @@ index 6d99e31da3..ccfa12c4af 100644
  		st::proxyEmptyListLabel);
  	_noRows->widthValue(
  	) | rpl::on_next([=](int width) {
-@@ -1404,7 +1869,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+@@ -1404,7 +1866,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
  
  	button->clicks(
  	) | rpl::on_next([=] {
 -		_controller->applyItem(id);
-+		if (_proxySettings->current() == ProxyData::Settings::Enabled) {
++		if (_settings.isEnabled()) {
 +			_controller->applyItem(id);
 +		}
  	}, button->lifetime());
  }
  
-@@ -1714,9 +2181,6 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1714,9 +2178,6 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  		}
  	}, _lifetime);
  
@@ -1108,7 +1116,7 @@ index 6d99e31da3..ccfa12c4af 100644
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
-@@ -2003,49 +2467,147 @@ auto ProxiesBoxController::proxySettingsValue() const
+@@ -2003,49 +2464,147 @@ auto ProxiesBoxController::proxySettingsValue() const
  	) | rpl::distinct_until_changed();
  }
  
@@ -1291,7 +1299,7 @@ index 6d99e31da3..ccfa12c4af 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
-@@ -2146,6 +2708,11 @@ void ProxiesBoxController::applyItem(int id) {
+@@ -2146,6 +2705,11 @@ void ProxiesBoxController::applyItem(int id) {
  
  void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	auto item = findById(id);
@@ -1303,7 +1311,7 @@ index 6d99e31da3..ccfa12c4af 100644
  	item->deleted = deleted;
  
  	if (deleted) {
-@@ -2195,6 +2762,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+@@ -2195,6 +2759,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	}
  	saveDelayed();
  	updateView(*item);
@@ -1315,7 +1323,7 @@ index 6d99e31da3..ccfa12c4af 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
-@@ -2217,16 +2789,18 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2217,16 +2786,18 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
  void ProxiesBoxController::replaceItemWith(
  		std::vector<Item>::iterator which,
  		std::vector<Item>::iterator with) {
@@ -1337,7 +1345,7 @@ index 6d99e31da3..ccfa12c4af 100644
  	saveDelayed();
  }
  
-@@ -2297,11 +2871,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+@@ -2297,11 +2868,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  		}
  	}
  	Core::App().setCurrentProxy(_settings.selected(), value);
@@ -1418,7 +1426,7 @@ index 6d99e31da3..ccfa12c4af 100644
  	if (_settings.useProxyForCalls() == enabled) {
  		return;
  	}
-@@ -2313,6 +2956,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
+@@ -2313,6 +2953,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
@@ -1428,7 +1436,7 @@ index 6d99e31da3..ccfa12c4af 100644
  	if (_settings.proxyRotationEnabled() == enabled) {
  		return;
  	}
-@@ -2321,6 +2967,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
+@@ -2321,6 +2964,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationTimeout(int value) {
@@ -1438,7 +1446,7 @@ index 6d99e31da3..ccfa12c4af 100644
  	if (_settings.proxyRotationTimeout() == value) {
  		return;
  	}
-@@ -2359,18 +3008,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+@@ -2359,18 +3005,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
  }
  
  void ProxiesBoxController::updateView(const Item &item) {
@@ -1491,7 +1499,7 @@ index 6d99e31da3..ccfa12c4af 100644
  			return item.state;
  		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
  			return ItemState::Online;
-@@ -2379,18 +3059,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+@@ -2379,18 +3056,19 @@ void ProxiesBoxController::updateView(const Item &item) {
  	}();
  	const auto supportsShare = ProxyDataIsShareable(item.data);
  	const auto supportsCalls = item.data.supportsCalls();
