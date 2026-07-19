@@ -1611,7 +1611,7 @@ index 5de98bc663..7268cb6677 100644
  
  	ProxyData _lastSelectedProxy;
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b846..2ca2e9ece1 100644
+index 495bb0b846..fde70d79b1 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
 @@ -11,8 +11,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1632,7 +1632,7 @@ index 495bb0b846..2ca2e9ece1 100644
 +	case MTP::ProxyData::CHelloType::YandexGost: return 4;
 +	case MTP::ProxyData::CHelloType::Chromium150: return 5;
 +	}
-+	return 0;
++	return 5;
 +}
 +
 +[[nodiscard]] MTP::ProxyData::CHelloType IntToProxyCHelloType(qint32 value) {
@@ -1645,7 +1645,7 @@ index 495bb0b846..2ca2e9ece1 100644
 +	case 4: return MTP::ProxyData::CHelloType::YandexGost;
 +	case 5: return MTP::ProxyData::CHelloType::Chromium150;
 +	}
-+	return MTP::ProxyData::CHelloType::Firefox;
++	return MTP::ProxyData::CHelloType::Chromium150;
 +}
 +
  namespace {
@@ -1881,7 +1881,7 @@ index 495bb0b846..2ca2e9ece1 100644
  	return _settings;
  }
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.h b/Telegram/SourceFiles/core/core_settings_proxy.h
-index 1f2ec5c516..b9a6f6fdfa 100644
+index 1f2ec5c516..69c84ba41f 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.h
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.h
 @@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1935,7 +1935,7 @@ index 1f2ec5c516..b9a6f6fdfa 100644
  	bool _checkIpWarningShown = false;
  	int _proxyRotationTimeout = kDefaultProxyRotationTimeout;
  	MTP::ProxyData::Settings _settings = MTP::ProxyData::Settings::System;
-+	MTP::ProxyData::CHelloType _ch_type = MTP::ProxyData::CHelloType::Firefox;
++	MTP::ProxyData::CHelloType _ch_type = MTP::ProxyData::CHelloType::Chromium150;
 +	bool _proxySlowMode = false;
 +	int _proxySlowDelay = 250;
 +	int _proxySlowJitter = 150;
@@ -3494,7 +3494,7 @@ index a7dd178b71..30920d1333 100644
  		const auto i = ranges::remove_if(current, [&](const QString &ip) {
  			const auto index = copy.indexOf(ip);
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c5402f..cd97532cec 100644
+index f1f2c5402f..e72021980f 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 @@ -10,9 +10,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -3546,7 +3546,7 @@ index f1f2c5402f..cd97532cec 100644
  		proxy.password);
  }
  
-+std::atomic<ProxyData::CHelloType> ProxyData::global_ch_type = ProxyData::CHelloType::Firefox;
++std::atomic<ProxyData::CHelloType> ProxyData::global_ch_type = ProxyData::CHelloType::Chromium150;
 +ProxyData::CHelloStatus ProxyData::global_ch_status;
 +std::atomic<bool> ProxyData::global_slow_mode = false;
 +std::atomic<int> ProxyData::global_slow_delay = 250;
@@ -3678,7 +3678,7 @@ index f1f2c5402f..cd97532cec 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f523..d568e57539 100644
+index 367ee3f523..b54ce31312 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -3705,8 +3705,8 @@ index 367ee3f523..d568e57539 100644
 +		RANDOM
 +	};
 +	struct CHelloStatus {
-+		CHelloType configured = CHelloType::Firefox;
-+		CHelloType actual = CHelloType::Firefox;
++		CHelloType configured = CHelloType::Chromium150;
++		CHelloType actual = CHelloType::Chromium150;
 +		QString host;
 +		uint32 port = 0;
 +		QString endpoint;
