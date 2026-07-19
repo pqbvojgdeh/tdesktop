@@ -1,26 +1,18 @@
-diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
-index fb81bb4903..da6110692d 100644
---- a/Telegram/Resources/langs/lang.strings
-+++ b/Telegram/Resources/langs/lang.strings
-@@ -1268,6 +1268,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
- "lng_proxy_use_system_settings" = "Use system proxy settings";
- "lng_proxy_use_custom" = "Use custom proxy";
- "lng_proxy_use_for_calls" = "Use proxy for calls";
-+"lng_proxy_chello_about"   = "MTProto Client Hello selection";
-+"lng_proxy_chello_chrome"  = "Chrome";
-+"lng_proxy_chello_chromium150" = "Chromium 150";
-+"lng_proxy_chello_firefox" = "FireFox";
-+"lng_proxy_chello_custom"  = "Firefox (permutated ext)";
-+"lng_proxy_chello_random"  = "Random selection on each connection";
-+"lng_proxy_chello_safari_mac" = "Safari (macOS)";
-+"lng_proxy_chello_yandex_gost" = "Yandex (GOST)";
-+"lng_proxy_slow_mode" = "Space repeated connections (default 250-400 ms)";
-+"lng_proxy_slow_delay" = "Delay (ms)";
-+"lng_proxy_slow_jitter" = "Jitter (ms)";
+diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+index 5476f7ed33..782109710e 100644
+--- a/Telegram/CMakeLists.txt
++++ b/Telegram/CMakeLists.txt
+@@ -39,6 +39,10 @@ include(cmake/td_ui.cmake)
+ include(cmake/telegram_apple_swift_runtime.cmake)
+ include(cmake/generate_appstream_changelog.cmake)
+ 
++if (DESKTOP_APP_MTPROTO_PROFILE_TESTS)
++    include(cmake/mtproto_profile_tests.cmake)
++endif()
 +
- "lng_proxy_auto_switch" = "Auto-switch proxies";
- "lng_proxy_auto_switch_about" = "You can choose how quickly the app should auto-connect to the nearest active proxy if the current one stops working.";
- "lng_proxy_auto_switch_timeout#one" = "{count} s";
+ if (DESKTOP_APP_TEST_APPS)
+     include(cmake/tests.cmake)
+ endif()
 diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
 index 3e51338c13..a3f1c5fbc1 100644
 --- a/Telegram/SourceFiles/boxes/boxes.style
@@ -48,7 +40,7 @@ index 3e51338c13..a3f1c5fbc1 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da3..3e2322ac6f 100644
+index 6d99e31da3..adb8879372 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -59,30 +59,97 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -799,9 +791,7 @@ index 6d99e31da3..3e2322ac6f 100644
  	});
 -	_tryIPv6->checkedChanges(
 +	_proxySlowMode->toggledChanges(
- 	) | rpl::on_next([=](bool checked) {
--		_controller->setTryIPv6(checked);
--	}, _tryIPv6->lifetime());
++	) | rpl::on_next([=](bool checked) {
 +		if (!_settings.isEnabled()) {
 +			_proxySlowModeValue = _settings.proxySlowMode();
 +			return;
@@ -812,7 +802,9 @@ index 6d99e31da3..3e2322ac6f 100644
 +		refreshProxySlowMode();
 +	}, _proxySlowMode->lifetime());
 +	_proxyAddressPriorityButton->toggledChanges(
-+	) | rpl::on_next([=](bool checked) {
+ 	) | rpl::on_next([=](bool checked) {
+-		_controller->setTryIPv6(checked);
+-	}, _tryIPv6->lifetime());
 +		if (_settings.isEnabled()) {
 +			_controller->setProxyPreferIPv6(checked);
 +		}
@@ -1157,7 +1149,7 @@ index 6d99e31da3..3e2322ac6f 100644
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
-@@ -2003,51 +2498,181 @@ auto ProxiesBoxController::proxySettingsValue() const
+@@ -2003,51 +2498,183 @@ auto ProxiesBoxController::proxySettingsValue() const
  	) | rpl::distinct_until_changed();
  }
  
@@ -1187,14 +1179,7 @@ index 6d99e31da3..3e2322ac6f 100644
 +}
 +
 +void ProxiesBoxController::refreshChecker(Item &item, bool batch) {
-+	auto finishCancelledBatch = false;
-+	if (item.batchCheck) {
-+		item.batchCheck = false;
-+		if (_batchChecksLeft > 0) {
-+			finishCancelledBatch = (--_batchChecksLeft == 0);
-+		}
-+	}
-+	item.checker = nullptr;
++	const auto finishCancelledBatch = cancelBatchCheck(item);
  	item.state = ItemState::Checking;
 +	item.ping = 0;
 +	item.checkedAt = QString();
@@ -1247,7 +1232,16 @@ index 6d99e31da3..3e2322ac6f 100644
 +	updateView(item);
 +	if (finishCancelledBatch) {
 +		finishChecksBatch();
+ 	}
+ }
+ 
++bool ProxiesBoxController::cancelBatchCheck(Item &item) {
++	item.checker = nullptr;
++	if (!item.batchCheck) {
++		return false;
 +	}
++	item.batchCheck = false;
++	return _batchChecksLeft > 0 && --_batchChecksLeft == 0;
 +}
 +
 +void ProxiesBoxController::checkFinished(
@@ -1272,9 +1266,9 @@ index 6d99e31da3..3e2322ac6f 100644
 +	updateView(*item);
 +	if (batch && _batchChecksLeft > 0 && --_batchChecksLeft == 0) {
 +		finishChecksBatch();
- 	}
- }
- 
++	}
++}
++
 +void ProxiesBoxController::refreshAllChecks() {
 +	if (!_settings.isEnabled() || _checksRunning.current()) {
 +		return;
@@ -1374,34 +1368,29 @@ index 6d99e31da3..3e2322ac6f 100644
  object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
  		not_null<Main::Account*> account,
  		const QString &highlightId) {
-@@ -2146,6 +2771,11 @@ void ProxiesBoxController::applyItem(int id) {
+@@ -2146,6 +2773,7 @@ void ProxiesBoxController::applyItem(int id) {
  
  void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	auto item = findById(id);
-+	const auto cancelledBatchCheck = deleted && item->batchCheck;
-+	if (cancelledBatchCheck) {
-+		item->batchCheck = false;
-+		item->checker = nullptr;
-+	}
++	const auto finishCancelledBatch = deleted && cancelBatchCheck(*item);
  	item->deleted = deleted;
  
  	if (deleted) {
-@@ -2195,6 +2825,11 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+@@ -2195,6 +2823,9 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	}
  	saveDelayed();
  	updateView(*item);
-+	if (cancelledBatchCheck
-+		&& _batchChecksLeft > 0
-+		&& --_batchChecksLeft == 0) {
++	if (finishCancelledBatch) {
 +		finishChecksBatch();
 +	}
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
-@@ -2217,16 +2852,18 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2217,17 +2848,23 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
  void ProxiesBoxController::replaceItemWith(
  		std::vector<Item>::iterator which,
  		std::vector<Item>::iterator with) {
++	const auto finishCancelledBatch = cancelBatchCheck(*which);
 +	const auto replacementId = with->id;
 +	const auto replacementDeleted = with->deleted;
  	const auto removed = _settings.removeFromList(which->data);
@@ -1418,8 +1407,12 @@ index 6d99e31da3..3e2322ac6f 100644
 -	applyItem(with->id);
 +	applyItem(replacementId);
  	saveDelayed();
++	if (finishCancelledBatch) {
++		finishChecksBatch();
++	}
  }
  
+ void ProxiesBoxController::replaceItemValue(
 @@ -2297,11 +2934,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  		}
  	}
@@ -1443,7 +1436,7 @@ index 6d99e31da3..3e2322ac6f 100644
 +	_settings.setProxyCHelloType(value);
 +	MTP::ProxyData::setGlobalClientHelloRulesType(value);
 +	MTP::ProxyData::clearGlobalCHelloStatuses();
-+	_account->mtp().restart();
++	Core::App().restartMtpForProxyConfigurationChange();
 +	_settings.connectionTypeChangesNotify();
 +	saveDelayed();
 +	return true;
@@ -1521,7 +1514,16 @@ index 6d99e31da3..3e2322ac6f 100644
  	if (_settings.proxyRotationTimeout() == value) {
  		return;
  	}
-@@ -2359,18 +3071,49 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+@@ -2333,7 +3045,7 @@ void ProxiesBoxController::setTryIPv6(bool enabled) {
+ 		return;
+ 	}
+ 	Core::App().settings().proxy().setTryIPv6(enabled);
+-	_account->mtp().restart();
++	Core::App().restartMtpForProxyConfigurationChange();
+ 	_settings.connectionTypeChangesNotify();
+ 	saveDelayed();
+ }
+@@ -2359,18 +3071,60 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
  }
  
  void ProxiesBoxController::updateView(const Item &item) {
@@ -1540,15 +1542,26 @@ index 6d99e31da3..3e2322ac6f 100644
 +	}
 +	_settings.setProxyPreferIPv6(value);
 +	MTP::ProxyData::setGlobalPreferIPv6(value);
++	const auto restartChecks = _checksRunning.current();
++	if (restartChecks) {
++		cancelAllChecks();
++	}
 +	for (auto &proxy : _settings.list()) {
 +		proxy.resolvedIPs.clear();
 +		proxy.resolvedExpireAt = 0;
++	}
++	for (auto &item : _list) {
++		item.data.resolvedIPs.clear();
++		item.data.resolvedExpireAt = 0;
 +	}
 +	auto selected = _settings.selected();
 +	selected.resolvedIPs.clear();
 +	selected.resolvedExpireAt = 0;
 +	_settings.setSelected(selected);
-+	_account->mtp().restart();
++	Core::App().restartMtpForProxyConfigurationChange();
++	if (restartChecks) {
++		refreshAllChecks();
++	}
 +	saveDelayed();
 +	return true;
 +}
@@ -1574,7 +1587,7 @@ index 6d99e31da3..3e2322ac6f 100644
  			return item.state;
  		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
  			return ItemState::Online;
-@@ -2379,18 +3122,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+@@ -2379,18 +3133,19 @@ void ProxiesBoxController::updateView(const Item &item) {
  	}();
  	const auto supportsShare = ProxyDataIsShareable(item.data);
  	const auto supportsCalls = item.data.supportsCalls();
@@ -1598,7 +1611,7 @@ index 6d99e31da3..3e2322ac6f 100644
  
  void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
-index 5de98bc663..74f621982d 100644
+index 5de98bc663..85f0dfca6a 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
 @@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1685,12 +1698,13 @@ index 5de98bc663..74f621982d 100644
  
  	};
  
-@@ -118,7 +132,13 @@ private:
+@@ -118,7 +132,14 @@ private:
  	void updateView(const Item &item);
  	void share(const ProxyData &proxy, bool qr = false);
  	void saveDelayed();
 -	void refreshChecker(Item &item);
 +	void refreshChecker(Item &item, bool batch = false);
++	[[nodiscard]] bool cancelBatchCheck(Item &item);
 +	void cancelAllChecks();
 +	void checkFinished(int id, ItemState state, int ping, bool batch);
 +	void finishChecksBatch();
@@ -1700,7 +1714,7 @@ index 5de98bc663..74f621982d 100644
  
  	void replaceItemWith(
  		std::vector<Item>::iterator which,
-@@ -134,6 +154,9 @@ private:
+@@ -134,6 +155,9 @@ private:
  	rpl::event_stream<ItemView> _views;
  	base::Timer _saveTimer;
  	rpl::event_stream<ProxyData::Settings> _proxySettingsChanges;
@@ -1710,8 +1724,39 @@ index 5de98bc663..74f621982d 100644
  	std::shared_ptr<Ui::Show> _show;
  
  	ProxyData _lastSelectedProxy;
+diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
+index 9be1f88a3a..9ef59cbce2 100644
+--- a/Telegram/SourceFiles/core/application.cpp
++++ b/Telegram/SourceFiles/core/application.cpp
+@@ -845,6 +845,14 @@ void Application::setCurrentProxy(
+ 	proxyRotationSettingsChanged();
+ }
+ 
++void Application::restartMtpForProxyConfigurationChange() {
++	const auto &settings = _private->settings.proxy();
++	const auto current = settings.isEnabled()
++		? settings.selected()
++		: MTP::ProxyData();
++	_proxyChanges.fire({ current, current });
++}
++
+ void Application::proxyRotationSettingsChanged() {
+ 	_private->proxyRotation->settingsChanged();
+ }
+diff --git a/Telegram/SourceFiles/core/application.h b/Telegram/SourceFiles/core/application.h
+index 48355e1c8f..1c8d72bcbc 100644
+--- a/Telegram/SourceFiles/core/application.h
++++ b/Telegram/SourceFiles/core/application.h
+@@ -220,6 +220,7 @@ public:
+ 	void setCurrentProxy(
+ 		const MTP::ProxyData &proxy,
+ 		MTP::ProxyData::Settings settings);
++	void restartMtpForProxyConfigurationChange();
+ 	void proxyRotationSettingsChanged();
+ 	void checkProxyRotation(not_null<Main::Account*> account, int32 state);
+ 	[[nodiscard]] rpl::producer<ProxyChange> proxyChanges() const;
 diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
-index 495bb0b846..d0b46b3308 100644
+index 495bb0b846..5720f175a7 100644
 --- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
 +++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
 @@ -11,8 +11,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1760,7 +1805,7 @@ index 495bb0b846..d0b46b3308 100644
  }
  
  [[nodiscard]] MTP::ProxyData::Settings IntToProxySettings(qint32 value) {
-@@ -30,14 +58,17 @@ namespace {
+@@ -30,14 +58,18 @@ namespace {
  	case 1: return MTP::ProxyData::Settings::Enabled;
  	case 2: return MTP::ProxyData::Settings::Disabled;
  	}
@@ -1768,9 +1813,11 @@ index 495bb0b846..d0b46b3308 100644
 +	return MTP::ProxyData::Settings::System;
  }
  
+-[[nodiscard]] MTP::ProxyData DeserializeProxyData(const QByteArray &data) {
 +constexpr auto kMaximumSerializedProxyCount = 4096;
 +
- [[nodiscard]] MTP::ProxyData DeserializeProxyData(const QByteArray &data) {
++[[nodiscard]] std::optional<MTP::ProxyData> DeserializeProxyData(
++		const QByteArray &data) {
  	QDataStream stream(data);
  	stream.setVersion(QDataStream::Qt_5_1);
  
@@ -1780,7 +1827,7 @@ index 495bb0b846..d0b46b3308 100644
  	MTP::ProxyData proxy;
  	stream
  		>> proxyType
-@@ -45,16 +76,25 @@ namespace {
+@@ -45,16 +77,35 @@ namespace {
  		>> port
  		>> proxy.user
  		>> proxy.password;
@@ -1802,14 +1849,24 @@ index 495bb0b846..d0b46b3308 100644
 +	if (!type
 +		|| port < 0
 +		|| port > 65535) {
-+		return {};
++		return std::nullopt;
 +	}
 +	proxy.port = port;
 +	proxy.type = *type;
++	if (proxy.type == MTP::ProxyData::Type::None) {
++		if (proxy.port
++			|| !proxy.host.isEmpty()
++			|| !proxy.user.isEmpty()
++			|| !proxy.password.isEmpty()) {
++			return std::nullopt;
++		}
++	} else if (!proxy.valid()) {
++		return std::nullopt;
++	}
  	return proxy;
  }
  
-@@ -75,7 +115,7 @@ namespace {
+@@ -75,7 +126,7 @@ namespace {
  			case MTP::ProxyData::Type::Http: return 2;
  			case MTP::ProxyData::Type::Mtproto: return 3;
  			}
@@ -1818,7 +1875,7 @@ index 495bb0b846..d0b46b3308 100644
  		}();
  
  		QDataStream stream(&result, QIODevice::WriteOnly);
-@@ -109,7 +149,7 @@ std::vector<int> NormalizeProxyRotationPreferredIndices(
+@@ -109,7 +160,7 @@ std::vector<int> NormalizeProxyRotationPreferredIndices(
  } // namespace
  
  SettingsProxy::SettingsProxy()
@@ -1827,7 +1884,7 @@ index 495bb0b846..d0b46b3308 100644
  }
  
  QByteArray SettingsProxy::serialize() const {
-@@ -126,7 +166,7 @@ QByteArray SettingsProxy::serialize() const {
+@@ -126,7 +177,7 @@ QByteArray SettingsProxy::serialize() const {
  			0,
  			ranges::plus(),
  			&Serialize::bytearraySize)
@@ -1836,7 +1893,7 @@ index 495bb0b846..d0b46b3308 100644
  	auto stream = Serialize::ByteArrayWriter(size);
  	stream
  		<< qint32(_tryIPv6 ? 1 : 0)
-@@ -145,6 +185,13 @@ QByteArray SettingsProxy::serialize() const {
+@@ -145,6 +196,13 @@ QByteArray SettingsProxy::serialize() const {
  	for (const auto index : _proxyRotationPreferredIndices) {
  		stream << qint32(index);
  	}
@@ -1850,7 +1907,7 @@ index 495bb0b846..d0b46b3308 100644
  	return std::move(stream).result();
  }
  
-@@ -170,7 +217,8 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -170,14 +228,19 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  			>> selectedProxy
  			>> listCount;
  		if (stream.ok()) {
@@ -1860,7 +1917,19 @@ index 495bb0b846..d0b46b3308 100644
  				return false;
  			}
  			list.reserve(listCount);
-@@ -199,7 +247,8 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 			for (auto i = 0; i != listCount; ++i) {
+ 				QByteArray data;
+ 				stream >> data;
+-				list.push_back(DeserializeProxyData(data));
++				const auto proxy = DeserializeProxyData(data);
++				if (!proxy || !proxy->valid()) {
++					return false;
++				}
++				list.push_back(*proxy);
+ 			}
+ 		}
+ 	}
+@@ -199,7 +262,8 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  	if (!stream.atEnd()) {
  		stream >> preferredCount;
  		if (stream.ok()) {
@@ -1870,7 +1939,7 @@ index 495bb0b846..d0b46b3308 100644
  				return false;
  			}
  			preferredIndices.reserve(preferredCount);
-@@ -210,6 +259,26 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -210,6 +274,26 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  			}
  		}
  	}
@@ -1897,7 +1966,7 @@ index 495bb0b846..d0b46b3308 100644
  
  	if (!stream.ok()) {
  		LOG(("App Error: "
-@@ -217,7 +286,9 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+@@ -217,16 +301,35 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
  		return false;
  	}
  
@@ -1908,8 +1977,16 @@ index 495bb0b846..d0b46b3308 100644
  	_useProxyForCalls = (useProxyForCalls == 1);
  	_checkIpWarningShown = (checkIpWarningShown == 1);
  	_proxyRotationEnabled = (proxyRotationEnabled == 1);
-@@ -226,7 +297,18 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
- 	_selected = DeserializeProxyData(selectedProxy);
+ 	setProxyRotationTimeout(proxyRotationTimeout);
+ 	_settings = IntToProxySettings(settings);
+-	_selected = DeserializeProxyData(selectedProxy);
++	if (selectedProxy.isEmpty()) {
++		_selected = MTP::ProxyData();
++	} else if (const auto selected = DeserializeProxyData(selectedProxy)) {
++		_selected = *selected;
++	} else {
++		return false;
++	}
  	_list = std::move(list);
  	setProxyRotationPreferredIndices(std::move(preferredIndices));
 -
@@ -1928,7 +2005,7 @@ index 495bb0b846..d0b46b3308 100644
  	return true;
  }
  
-@@ -306,10 +388,50 @@ int SettingsProxy::proxyRotationTimeout() const {
+@@ -306,10 +409,50 @@ int SettingsProxy::proxyRotationTimeout() const {
  
  void SettingsProxy::setProxyRotationTimeout(int value) {
  	_proxyRotationTimeout = (value > 0)
@@ -2045,7 +2122,7 @@ index 1f2ec5c516..69c84ba41f 100644
  	std::vector<MTP::ProxyData> _list;
  	std::vector<int> _proxyRotationPreferredIndices;
 diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
-index a643f0aee6..27f4a7d024 100644
+index a643f0aee6..41d41d6dc6 100644
 --- a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
 +++ b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
 @@ -19,14 +19,16 @@ namespace Core {
@@ -2125,13 +2202,14 @@ index a643f0aee6..27f4a7d024 100644
  	auto attemptsLeft = int(_probeOrder.size());
  	while (attemptsLeft-- > 0) {
  		if (_nextCheckIndex >= int(_probeOrder.size())) {
-@@ -237,24 +227,22 @@ void ProxyRotationManager::startNextCheck() {
+@@ -237,24 +227,23 @@ void ProxyRotationManager::startNextCheck() {
  		}
  		const auto &proxy = settings.list()[listIndex];
  		auto &entry = ensure(proxy);
 -		if (entry.checking) {
++		const auto checkedSinceStart = entry.checkedAt >= _switchStartedAt;
 +		if (entry.checking
-+			|| (entry.checkedAt
++			|| (checkedSinceStart
 +				&& (now - entry.checkedAt < recheckInterval()))) {
  			continue;
  		}
@@ -2158,7 +2236,7 @@ index a643f0aee6..27f4a7d024 100644
  	}
  }
  
-@@ -262,32 +250,71 @@ void ProxyRotationManager::switchTimerDone() {
+@@ -262,32 +251,71 @@ void ProxyRotationManager::switchTimerDone() {
  	if (!_checking || !shouldSwitchToAvailable()) {
  		return;
  	}
@@ -2240,7 +2318,7 @@ index a643f0aee6..27f4a7d024 100644
  	const auto proxySettings = &App().settings().proxy();
  	if (const auto index = proxySettings->indexInList(proxy); index >= 0) {
  		if (proxySettings->promoteProxyRotationPreferredIndex(index)) {
-@@ -296,25 +323,25 @@ void ProxyRotationManager::checkDone(
+@@ -296,25 +324,25 @@ void ProxyRotationManager::checkDone(
  	}
  	updateProbeOrder();
  	if (_waitingToSwitch && shouldSwitchToAvailable()) {
@@ -2277,7 +2355,7 @@ index a643f0aee6..27f4a7d024 100644
  }
  
  bool ProxyRotationManager::switchToAvailable() {
-@@ -322,6 +349,8 @@ bool ProxyRotationManager::switchToAvailable() {
+@@ -322,6 +350,8 @@ bool ProxyRotationManager::switchToAvailable() {
  		return false;
  	}
  	const auto &settings = App().settings().proxy();
@@ -2286,7 +2364,7 @@ index a643f0aee6..27f4a7d024 100644
  	for (const auto index : _probeOrder) {
  		if (index < 0 || index >= int(settings.list().size())) {
  			continue;
-@@ -334,12 +363,20 @@ bool ProxyRotationManager::switchToAvailable() {
+@@ -334,12 +364,20 @@ bool ProxyRotationManager::switchToAvailable() {
  		if (entry->availableAt < _switchStartedAt) {
  			continue;
  		}
@@ -2553,10 +2631,10 @@ index 0000000000..53de70565e
 +} // namespace MTP::details
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
 new file mode 100644
-index 0000000000..2b5d313339
+index 0000000000..de5a1c7fd6
 --- /dev/null
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,195 @@
 +#pragma once
 +
 +#include <cstddef>
@@ -2633,6 +2711,9 @@ index 0000000000..2b5d313339
 +	}
 +
 +	const auto extensionsEnd = offset + extensionsLength;
++	auto sawKeyShare = false;
++	auto sawPsk = false;
++	auto sawPskModes = false;
 +	while (offset < extensionsEnd) {
 +		if (!available(offset, 4)) {
 +			return result;
@@ -2645,9 +2726,10 @@ index 0000000000..2b5d313339
 +		}
 +		const auto extensionEnd = offset + length;
 +		if (type == 0x0033) {
-+			if (length < 2 || u16(offset) != length - 2) {
++			if (sawKeyShare || length < 2 || u16(offset) != length - 2) {
 +				return result;
 +			}
++			sawKeyShare = true;
 +			auto share = offset + 2;
 +			auto shareCount = 0;
 +			while (share < extensionEnd) {
@@ -2678,11 +2760,29 @@ index 0000000000..2b5d313339
 +				return result;
 +			}
 +			result.hasKeyShare = true;
-+		} else if (type == 0x0029) {
-+			if (extensionEnd != extensionsEnd || length < 7) {
++		} else if (type == 0x002D) {
++			if (sawPskModes
++				|| length < 2
++				|| byte(offset) != length - 1) {
 +				return result;
 +			}
++			sawPskModes = true;
++			auto supportsDhe = false;
++			for (auto i = offset + 1; i != extensionEnd; ++i) {
++				supportsDhe |= (byte(i) == 0x01);
++			}
++			if (!supportsDhe) {
++				return result;
++			}
++		} else if (type == 0x0029) {
++			if (sawPsk
++				|| extensionEnd != extensionsEnd
++				|| length < 7) {
++				return result;
++			}
++			sawPsk = true;
 +			auto item = offset;
++			auto identityCount = 0;
 +			const auto identitiesLength = std::size_t(u16(item));
 +			item += 2;
 +			const auto identitiesEnd = item + identitiesLength;
@@ -2699,6 +2799,7 @@ index 0000000000..2b5d313339
 +					return result;
 +				}
 +				item += identityLength + 4;
++				++identityCount;
 +			}
 +			const auto bindersLength = std::size_t(u16(item));
 +			item += 2;
@@ -2706,25 +2807,31 @@ index 0000000000..2b5d313339
 +				return result;
 +			}
 +			const auto bindersEnd = extensionEnd;
++			auto binderCount = 0;
 +			while (item < bindersEnd) {
 +				const auto binderLength = byte(item++);
 +				if (!binderLength || item + binderLength > bindersEnd) {
 +					return result;
 +				}
 +				item += binderLength;
++				++binderCount;
++			}
++			if (identityCount != binderCount) {
++				return result;
 +			}
 +			result.resumed = true;
 +		}
 +		offset = extensionEnd;
 +	}
 +	result.valid = result.hasKeyShare
++		&& (!result.resumed || sawPskModes)
 +		&& (expectResumed < 0 || result.resumed == bool(expectResumed));
 +	return result;
 +}
 +
 +} // namespace MTP::details
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a556..e0ccab0b58 100644
+index 448190a556..acfc841105 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 @@ -7,36 +7,865 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -2742,7 +2849,6 @@ index 448190a556..e0ccab0b58 100644
  #include "base/random.h"
  #include "base/unixtime.h"
 +#include <chrono>
-+#include <thread>
 +#include <array>
 +#include <map>
 +#include <tuple>
@@ -2761,6 +2867,7 @@ index 448190a556..e0ccab0b58 100644
 +constexpr auto kMaxGrease = 8;
 +constexpr auto kClientHelloLimit = 4096;
 +constexpr auto kMaximumDelayedConnect = std::chrono::milliseconds(7500);
++constexpr auto kMaximumPendingDelayedConnects = 16;
 +constexpr auto kHelloDigestLength = 32;
 +constexpr auto kLengthSize = sizeof(uint16);
 +constexpr auto kMaxServerHelloLength = 65536;
@@ -3665,7 +3772,7 @@ index 448190a556..e0ccab0b58 100644
  	CloseScope();
  	CloseScope();
  	CloseScope();
-@@ -231,6 +1070,139 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +1070,136 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -3719,9 +3826,6 @@ index 448190a556..e0ccab0b58 100644
 +	status.host = address;
 +	status.port = port;
 +	status.domainId = ClientHelloDomainId(domain);
-+	status.endpoint = address.contains(':')
-+		? u"[%1]:%2"_q.arg(address).arg(port)
-+		: u"%1:%2"_q.arg(address).arg(port);
 +	status.random = (configured == ProxyData::CHelloType::RANDOM);
 +	status.chromium150 = (actual == ProxyData::CHelloType::Chromium150);
 +	status.resumed = resumed;
@@ -3805,7 +3909,7 @@ index 448190a556..e0ccab0b58 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -246,8 +1218,8 @@ using BigNumContext = openssl::Context;
+@@ -246,8 +1215,8 @@ using BigNumContext = openssl::Context;
  	return result;
  }
  
@@ -3816,7 +3920,7 @@ index 448190a556..e0ccab0b58 100644
  	if (!context) {
  		return {};
  	}
-@@ -271,7 +1243,9 @@ using BigNumContext = openssl::Context;
+@@ -271,7 +1240,9 @@ using BigNumContext = openssl::Context;
  	if (!EVP_PKEY_get_raw_public_key(key, nullptr, &length)) {
  		return {};
  	}
@@ -3827,7 +3931,7 @@ index 448190a556..e0ccab0b58 100644
  
  	auto result = bytes::vector(length);
  	const auto code = EVP_PKEY_get_raw_public_key(
-@@ -281,6 +1255,56 @@ using BigNumContext = openssl::Context;
+@@ -281,6 +1252,56 @@ using BigNumContext = openssl::Context;
  	if (!code) {
  		return {};
  	}
@@ -3884,7 +3988,7 @@ index 448190a556..e0ccab0b58 100644
  	return result;
  }
  
-@@ -304,7 +1328,7 @@ private:
+@@ -304,7 +1325,7 @@ private:
  			bytes::const_span domain,
  			const bytes::vector &greases);
  
@@ -3893,7 +3997,7 @@ index 448190a556..e0ccab0b58 100644
  		void writeBlocks(const QVector<MTPTlsBlock> &blocks);
  		void writeBlock(const MTPTlsBlock &data);
  		void writeBlock(const MTPDtlsBlockString &data);
-@@ -313,6 +1337,7 @@ private:
+@@ -313,6 +1334,7 @@ private:
  		void writeBlock(const MTPDtlsBlockRandom &data);
  		void writeBlock(const MTPDtlsBlockDomain &data);
  		void writeBlock(const MTPDtlsBlockPublicKey &data);
@@ -3901,7 +4005,7 @@ index 448190a556..e0ccab0b58 100644
  		void writeBlock(const MTPDtlsBlockScope &data);
  		void writeBlock(const MTPDtlsBlockPermutation &data);
  		void writeBlock(const MTPDtlsBlockM &data);
-@@ -362,16 +1387,16 @@ QByteArray Generator::Part::take() {
+@@ -362,16 +1384,16 @@ QByteArray Generator::Part::take() {
  	return _error ? QByteArray() : std::move(_result);
  }
  
@@ -3922,7 +4026,7 @@ index 448190a556..e0ccab0b58 100644
  	return bytes::make_detached_span(_result).subspan(offset);
  }
  
-@@ -411,7 +1436,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
+@@ -411,7 +1433,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
  
  void Generator::Part::writeBlock(const MTPDtlsBlockGrease &data) {
  	const auto seed = data.vseed().v;
@@ -3931,7 +4035,7 @@ index 448190a556..e0ccab0b58 100644
  		_error = true;
  		return;
  	}
-@@ -440,7 +1465,16 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
+@@ -440,7 +1462,16 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
  }
  
  void Generator::Part::writeBlock(const MTPDtlsBlockPublicKey &data) {
@@ -3949,7 +4053,7 @@ index 448190a556..e0ccab0b58 100644
  	const auto storage = grow(key.size());
  	if (storage.empty()) {
  		return;
-@@ -494,10 +1528,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
+@@ -494,10 +1525,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
  	bytes::set_random(random);
  
  	auto chars = reinterpret_cast<char*>(storage.data());
@@ -3965,7 +4069,7 @@ index 448190a556..e0ccab0b58 100644
  		*chars++ = (char)(a & 255);
  		*chars++ = (char)((a >> 8) + ((b & 15) << 4));
  		*chars++ = (char)(b >> 4);
-@@ -523,7 +1559,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
+@@ -523,7 +1556,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
  void Generator::Part::finalize(bytes::const_span key) {
  	if (_error) {
  		return;
@@ -3975,7 +4079,7 @@ index 448190a556..e0ccab0b58 100644
  		_error = true;
  		return;
  	}
-@@ -532,7 +1569,8 @@ void Generator::Part::finalize(bytes::const_span key) {
+@@ -532,7 +1566,8 @@ void Generator::Part::finalize(bytes::const_span key) {
  }
  
  QByteArray Generator::Part::extractDigest() const {
@@ -3985,7 +4089,7 @@ index 448190a556..e0ccab0b58 100644
  		return {};
  	}
  	return _result.mid(_digestPosition, kHelloDigestLength);
-@@ -576,8 +1614,15 @@ ClientHello Generator::take() {
+@@ -576,8 +1611,15 @@ ClientHello Generator::take() {
  [[nodiscard]] ClientHello PrepareClientHello(
  		const MTPTlsClientHello &rules,
  		bytes::const_span domain,
@@ -4003,7 +4107,44 @@ index 448190a556..e0ccab0b58 100644
  }
  
  [[nodiscard]] bool CheckPart(bytes::const_span data, QLatin1String check) {
-@@ -653,11 +1698,25 @@ void TlsSocket::plainConnected() {
+@@ -597,6 +1639,36 @@ ClientHello Generator::take() {
+ 
+ } // namespace
+ 
++bool ValidateClientHelloProfilesForTests() {
++	const auto domain = QByteArray("example.com");
++	const auto key = bytes::vector(16, bytes::type(0x42));
++	const auto check = [&](const MTPTlsClientHello &rules,
++			int expectedResumed,
++			bool expectedP256) {
++		const auto hello = Generator(
++			rules,
++			bytes::make_span(domain),
++			bytes::make_span(key)).take();
++		if (hello.data.isEmpty() || hello.digest.size() != kHelloDigestLength) {
++			return false;
++		}
++		const auto validation = ValidateClientHello(
++			std::span<const std::byte>(
++				reinterpret_cast<const std::byte*>(hello.data.constData()),
++				std::size_t(hello.data.size())),
++			expectedResumed);
++		return validation.valid
++			&& validation.hasP256KeyShare == expectedP256;
++	};
++	return check(PrepareClientHelloRules_Chrome(), 0, false)
++		&& check(PrepareClientHelloRules_Firefox(), 0, true)
++		&& check(PrepareClientHelloRules_Firefox(true), 0, true)
++		&& check(PrepareClientHelloRules_SafariMac(), 0, false)
++		&& check(PrepareClientHelloRules_YandexGost(), 1, false)
++		&& check(PrepareClientHelloRules_Chromium150(false), 0, false)
++		&& check(PrepareClientHelloRules_Chromium150(true), 1, false);
++}
++
+ TlsSocket::TlsSocket(
+ 	not_null<QThread*> thread,
+ 	const bytes::vector &secret,
+@@ -653,11 +1725,25 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -4033,7 +4174,7 @@ index 448190a556..e0ccab0b58 100644
  	if (hello.data.isEmpty()) {
  		logError(888, "Could not generate Client Hello.");
  		_state = State::Error;
-@@ -671,6 +1730,7 @@ void TlsSocket::plainConnected() {
+@@ -671,6 +1757,7 @@ void TlsSocket::plainConnected() {
  
  void TlsSocket::plainDisconnected() {
  	_state = State::NotConnected;
@@ -4041,7 +4182,7 @@ index 448190a556..e0ccab0b58 100644
  	_incoming = QByteArray();
  	_serverHelloLength = 0;
  	_incomingGoodDataOffset = 0;
-@@ -699,6 +1759,11 @@ void TlsSocket::readHello() {
+@@ -699,6 +1786,11 @@ void TlsSocket::readHello() {
  			return;
  		}
  		_incoming.append(_socket.readAll());
@@ -4053,7 +4194,7 @@ index 448190a556..e0ccab0b58 100644
  	}
  	checkHelloParts12(parts1Size);
  }
-@@ -794,6 +1859,19 @@ void TlsSocket::checkHelloDigest() {
+@@ -794,6 +1886,19 @@ void TlsSocket::checkHelloDigest() {
  	}
  	_incomingGoodDataOffset = _incomingGoodDataLimit = 0;
  	_state = State::Connected;
@@ -4073,7 +4214,7 @@ index 448190a556..e0ccab0b58 100644
  	_connected.fire({});
  }
  
-@@ -854,6 +1932,51 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -854,6 +1959,87 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -4081,40 +4222,76 @@ index 448190a556..e0ccab0b58 100644
 +	_port = port;
 +	if (MTP::ProxyData::globalSlowMode()) {
 +		namespace sc = std::chrono;
++		struct Slot {
++			sc::steady_clock::time_point next;
++			int pending = 0;
++		};
 +		static QMutex mutex;
-+		static auto slots = std::map<std::pair<QString, int>, sc::steady_clock::time_point>{};
++		static auto slots = std::map<std::pair<QString, int>, Slot>();
 +		const auto delay = qMax(0, MTP::ProxyData::globalSlowDelay());
 +		const auto jitter = qMax(0, MTP::ProxyData::globalSlowJitter());
++		const auto endpoint = std::make_pair(address, port);
 +
 +		sc::milliseconds waitFor{0};
++		auto overflow = false;
 +		{
 +			const QMutexLocker lock(&mutex);
 +			const auto now = sc::steady_clock::now();
 +			for (auto i = slots.begin(); i != slots.end();) {
-+				i = (i->second <= now) ? slots.erase(i) : std::next(i);
++				i = (i->second.pending == 0 && i->second.next <= now)
++					? slots.erase(i)
++					: std::next(i);
 +			}
 +			const auto extra = jitter ? QRandomGenerator::global()->bounded(jitter + 1) : 0;
-+			const auto gap = delay + extra;
-+			auto &slot = slots[{ address, port }];
-+			if (slot.time_since_epoch().count() != 0) {
-+				if (now < slot) {
++			const auto gap = std::min(
++				sc::milliseconds(delay + extra),
++				kMaximumDelayedConnect);
++			auto &slot = slots[endpoint];
++			if (slot.next.time_since_epoch().count() != 0) {
++				if (now < slot.next) {
 +					waitFor = sc::duration_cast<sc::milliseconds>(
-+						slot - now);
++						slot.next - now);
 +				} else {
-+					slot = sc::steady_clock::time_point{};
++					slot.next = now;
 +				}
 +			}
 +			const auto maximum = now + kMaximumDelayedConnect;
-+			if (slot.time_since_epoch().count() == 0) {
-+				slot = std::min(now + sc::milliseconds(gap), maximum);
-+			} else {
-+				slot = std::min(slot + sc::milliseconds(gap), maximum);
++			const auto next = slot.next.time_since_epoch().count() == 0
++				? now + gap
++				: slot.next + gap;
++			overflow = (slot.pending >= kMaximumPendingDelayedConnects)
++				|| (next > maximum);
++			if (!overflow) {
++				slot.next = next;
++				if (waitFor.count() > 0) {
++					++slot.pending;
++				}
 +			}
++		}
++		if (overflow) {
++			QTimer::singleShot(0, this, [=] {
++				if (_state == State::Connecting) {
++					logError(888, "Slow-mode connection queue is full.");
++					_state = State::Error;
++					_error.fire({});
++				}
++			});
++			return;
 +		}
 +		if (waitFor.count() > 0) {
 +			const auto _address = address;
 +			const auto _port    = port;
 +			QTimer::singleShot(waitFor.count(), this, [=] {
++				{
++					const QMutexLocker lock(&mutex);
++					if (const auto i = slots.find(endpoint); i != end(slots)) {
++						i->second.pending = std::max(i->second.pending - 1, 0);
++						if (i->second.pending == 0
++							&& i->second.next <= sc::steady_clock::now()) {
++							slots.erase(i);
++						}
++					}
++				}
 +				if (_state == State::Connecting) {
 +					_socket.connectToHost(_address, _port);
 +				}
@@ -4125,7 +4302,7 @@ index 448190a556..e0ccab0b58 100644
  	_socket.connectToHost(address, port);
  }
  
-@@ -954,6 +2077,7 @@ void TlsSocket::handleError(int errorCode) {
+@@ -954,6 +2140,7 @@ void TlsSocket::handleError(int errorCode) {
  		logError(errorCode, _socket.errorString());
  	}
  	_state = State::Error;
@@ -4134,10 +4311,19 @@ index 448190a556..e0ccab0b58 100644
  }
  
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index d4a90083ea..908f26dc3f 100644
+index d4a90083ea..27d18ba6dc 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-@@ -57,11 +57,17 @@ private:
+@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ namespace MTP::details {
+ 
++[[nodiscard]] bool ValidateClientHelloProfilesForTests();
++
+ class TlsSocket final : public AbstractSocket {
+ public:
+ 	TlsSocket(
+@@ -57,11 +59,17 @@ private:
  
  	const bytes::vector _secret;
  	QTcpSocket _socket;
@@ -4406,7 +4592,7 @@ index f1f2c5402f..f1e7f1ed26 100644
 +
  } // namespace MTP
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
-index 367ee3f523..fac07439ff 100644
+index 367ee3f523..014a11fa41 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 @@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -4418,7 +4604,7 @@ index 367ee3f523..fac07439ff 100644
  namespace MTP {
  
  struct ProxyData {
-@@ -29,6 +31,30 @@ struct ProxyData {
+@@ -29,6 +31,29 @@ struct ProxyData {
  		IncorrectSecret,
  		Invalid,
  	};
@@ -4437,7 +4623,6 @@ index 367ee3f523..fac07439ff 100644
 +		CHelloType actual = CHelloType::Chromium150;
 +		QString host;
 +		uint32 port = 0;
-+		QString endpoint;
 +		QByteArray domainId;
 +		bool random = false;
 +		bool chromium150 = false;
@@ -4449,7 +4634,7 @@ index 367ee3f523..fac07439ff 100644
  
  	Type type = Type::None;
  	QString host;
-@@ -51,6 +77,41 @@ struct ProxyData {
+@@ -51,6 +76,41 @@ struct ProxyData {
  	[[nodiscard]] static Status MtprotoPasswordStatus(
  		const QString &password);
  
@@ -4809,6 +4994,69 @@ index 76225965bf..d290433068 100644
  tlsBlockScope entries:Vector<TlsBlock> = TlsBlock;
  tlsBlockPermutation entries:Vector<Vector<TlsBlock>> = TlsBlock;
  tlsBlockM = TlsBlock;
+diff --git a/Telegram/SourceFiles/tests/test_mtproto_client_hello.cpp b/Telegram/SourceFiles/tests/test_mtproto_client_hello.cpp
+new file mode 100644
+index 0000000000..d641847a92
+--- /dev/null
++++ b/Telegram/SourceFiles/tests/test_mtproto_client_hello.cpp
+@@ -0,0 +1,24 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#include "mtproto/details/mtproto_tls_socket.h"
++
++#include <QCoreApplication>
++
++#include <iostream>
++
++int main(int argc, char *argv[]) {
++	const auto application = QCoreApplication(argc, argv);
++	if (!MTP::details::ValidateClientHelloProfilesForTests()) {
++		std::cerr << "Production ClientHello profile validation failed."
++			<< std::endl;
++		return 1;
++	}
++	std::cout << "Production ClientHello profiles passed."
++		<< std::endl;
++	return 0;
++}
+diff --git a/Telegram/cmake/mtproto_profile_tests.cmake b/Telegram/cmake/mtproto_profile_tests.cmake
+new file mode 100644
+index 0000000000..1c026d34f2
+--- /dev/null
++++ b/Telegram/cmake/mtproto_profile_tests.cmake
+@@ -0,0 +1,27 @@
++# This file is part of Telegram Desktop,
++# the official desktop application for the Telegram messaging service.
++#
++# For license and copyright information please follow this link:
++# https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++
++add_executable(test_mtproto_client_hello)
++init_target(test_mtproto_client_hello "(tests)")
++
++target_include_directories(test_mtproto_client_hello PRIVATE ${src_loc})
++
++nice_target_sources(test_mtproto_client_hello ${src_loc}
++PRIVATE
++    tests/test_mtproto_client_hello.cpp
++)
++
++target_link_libraries(test_mtproto_client_hello
++PRIVATE
++    tdesktop::td_mtproto
++    desktop-app::lib_base
++    desktop-app::lib_crl
++    desktop-app::external_qt
++)
++
++set_target_properties(test_mtproto_client_hello PROPERTIES
++    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
++)
 diff --git a/Telegram/cmake/td_mtproto.cmake b/Telegram/cmake/td_mtproto.cmake
 index 79a0a3c76f..668c70f7a3 100644
 --- a/Telegram/cmake/td_mtproto.cmake

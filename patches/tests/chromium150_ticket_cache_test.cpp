@@ -43,6 +43,33 @@ int main() {
 	}
 
 	{
+		auto noEntries = Cache(0, 2);
+		auto generated = 0;
+		Expect(noEntries.confirm(1, [&] {
+			++generated;
+			return Minutes(40);
+		}, start) == Minutes(0),
+			"A zero-capacity cache must not issue tickets.");
+		Expect(generated == 0,
+			"A zero-capacity cache must not call the lifetime generator.");
+
+		auto noSlots = Cache(128, 0);
+		Expect(noSlots.confirm(1, [] { return Minutes(40); }, start)
+			== Minutes(0),
+			"A cache with zero ticket slots must stay empty.");
+	}
+
+	{
+		auto cache = Cache(128, 2);
+		Expect(cache.confirm(1, [] { return Minutes(0); }, start)
+			== Minutes(1),
+			"A zero lifetime must be clamped to one minute.");
+		Expect(cache.confirm(2, [] { return Minutes(-5); }, start)
+			== Minutes(1),
+			"A negative lifetime must be clamped to one minute.");
+	}
+
+	{
 		auto cache = Cache(128, 2);
 		(void)cache.confirm(1, lifetime, start);
 		Expect(cache.take(1, start), "A failed attempt still takes one ticket.");

@@ -164,7 +164,7 @@ jobs:
           echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
 
       - name: Checkout pinned source commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: ${{ needs.source.outputs.source_repository }}
           ref: ${{ needs.source.outputs.source_sha }}
@@ -309,7 +309,7 @@ jobs:
           Write-Host "ATL header: $($atlHeader.FullName)"
 
       - name: Initialize MSVC x64 environment
-        uses: Eden-CI/msvc-dev-cmd@master
+        uses: Eden-CI/msvc-dev-cmd@1bd71f95d6f3d1b2b3395b335cc63bcdc90cf223
         with:
           arch: x64
           sdk: ${{ env.SDK }}
@@ -409,7 +409,7 @@ jobs:
 
       - name: Restore ThirdParty dependency cache
         id: thirdparty
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.TBUILD }}\ThirdParty
           key: ${{ runner.OS }}-vs2026-upstream-dev-third-party-${{ steps.cache_key.outputs.cache_key }}
@@ -418,7 +418,7 @@ jobs:
 
       - name: Restore Release libraries dependency cache
         id: libraries
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ${{ env.LibrariesPath }}\*
@@ -432,7 +432,7 @@ jobs:
 
       - name: Restore Release Qt 6 dependency cache
         id: qt
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ${{ env.LibrariesPath }}\[qQ]t[_-]*
@@ -508,14 +508,14 @@ jobs:
 
       - name: Save ThirdParty dependency cache
         if: steps.thirdparty.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.TBUILD }}\ThirdParty
           key: ${{ runner.OS }}-vs2026-upstream-dev-third-party-${{ steps.cache_key.outputs.cache_key }}
 
       - name: Save Release libraries dependency cache
         if: steps.libraries.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ${{ env.LibrariesPath }}\*
@@ -527,7 +527,7 @@ jobs:
 
       - name: Save Release Qt 6 dependency cache
         if: steps.qt.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ${{ env.LibrariesPath }}\[qQ]t[_-]*
@@ -624,7 +624,7 @@ jobs:
           echo "Selected artifact: $artifact_name"
 
       - name: Download exact successful Windows package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ steps.select.outputs.artifact_name }}
           path: release-input
@@ -817,3 +817,48 @@ jobs:
         run: |
           echo "::error::Reliable Ninja profile failed."
           exit 1
+
+  final_result:
+    name: Require a published release
+    needs:
+      - gate
+      - source
+      - prepare_dependencies
+      - release_ninja_p2
+      - publish_release
+      - no_profile_succeeded
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify mandatory workflow result
+        shell: bash
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+          SOURCE_RESULT: ${{ needs.source.result }}
+          DEPENDENCIES_RESULT: ${{ needs.prepare_dependencies.result }}
+          BUILD_RESULT: ${{ needs.release_ninja_p2.result }}
+          BUILT_PACKAGE: ${{ needs.release_ninja_p2.outputs.built }}
+          PUBLISH_RESULT: ${{ needs.publish_release.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GATE_RESULT" != "success" \
+            || "$SOURCE_RESULT" != "success" \
+            || "$DEPENDENCIES_RESULT" != "success" \
+            || "$BUILD_RESULT" != "success" \
+            || "$BUILT_PACKAGE" != "true" \
+            || "$PUBLISH_RESULT" != "success" ]]; then
+            echo "::error::The workflow did not build and publish a verified package."
+            printf '%s\n' \
+              "gate=$GATE_RESULT" \
+              "source=$SOURCE_RESULT" \
+              "dependencies=$DEPENDENCIES_RESULT" \
+              "build=$BUILD_RESULT" \
+              "built_package=$BUILT_PACKAGE" \
+              "publish=$PUBLISH_RESULT"
+            exit 1
+          fi
+
+          echo "A verified package was built and published."

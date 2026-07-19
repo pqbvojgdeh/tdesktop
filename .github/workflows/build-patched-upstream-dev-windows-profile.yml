@@ -81,8 +81,6 @@ jobs:
       BUILD_LTO_MODE: ${{ inputs.lto_mode }}
       BUILD_PARALLEL: ${{ inputs.parallel }}
       REQUIRE_VS2026: ${{ inputs.require_vs2026 }}
-      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
-      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
       SCCACHE_GHA_ENABLED: "true"
 
     defaults:
@@ -100,14 +98,14 @@ jobs:
 
       - name: Checkout patched variant sources
         if: ${{ inputs.variant == 'patched' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: mtproto-patches
           fetch-depth: 1
           path: patch-source
 
       - name: Checkout pinned source commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: ${{ inputs.source_repository }}
           ref: ${{ inputs.source_sha }}
@@ -349,7 +347,7 @@ jobs:
           Write-Host "ATL header: $($atlHeader.FullName)"
 
       - name: Initialize MSVC x64 environment
-        uses: Eden-CI/msvc-dev-cmd@master
+        uses: Eden-CI/msvc-dev-cmd@1bd71f95d6f3d1b2b3395b335cc63bcdc90cf223
         with:
           arch: x64
           sdk: ${{ env.SDK }}
@@ -593,14 +591,14 @@ jobs:
           nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
 
       - name: Restore prepared ThirdParty cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ env.TBUILD }}\ThirdParty
           key: ${{ runner.OS }}-vs2026-upstream-dev-third-party-${{ inputs.cache_key }}
           fail-on-cache-miss: true
 
       - name: Restore prepared Release libraries cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ${{ env.LibrariesPath }}\*
@@ -612,7 +610,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Restore prepared Release Qt 6 cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ${{ env.LibrariesPath }}\[qQ]t[_-]*
@@ -646,6 +644,9 @@ jobs:
 
       - name: Verify Telegram API secrets
         shell: pwsh
+        env:
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           if ($env:TDESKTOP_API_ID -notmatch '^[0-9]+$') {
             Write-Error 'TDESKTOP_API_ID repository secret is missing or invalid.'
@@ -658,16 +659,20 @@ jobs:
           }
 
       - name: Enable shared MSVC compiler cache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.10
 
       - name: Configure and build selected profile
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{ inputs.parallel }}
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
 
           set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF"
           if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2"
+          set "MTPROTO_TEST_FLAGS="
+          if /I "%BUILD_VARIANT%"=="patched" set "MTPROTO_TEST_FLAGS=-D DESKTOP_APP_MTPROTO_PROFILE_TESTS=ON"
 
           rem Temporary CMake 4.4 compatibility; remove after upstream handles CMP0218.
           if /I "%BUILD_GENERATOR%"=="official" (
@@ -686,6 +691,7 @@ jobs:
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
+              %MTPROTO_TEST_FLAGS% ^
               %LTO_FLAGS%
           ) else (
             call configure.bat ^
@@ -702,10 +708,22 @@ jobs:
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
               -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
+              %MTPROTO_TEST_FLAGS% ^
               %LTO_FLAGS%
           )
 
           if errorlevel 1 exit /b 1
+
+          if /I "%BUILD_VARIANT%"=="patched" (
+            cmake --build ..\out ^
+              --config Release ^
+              --target test_mtproto_client_hello ^
+              --parallel %BUILD_PARALLEL%
+            if errorlevel 1 exit /b 1
+
+            ..\out\Release\test_mtproto_client_hello.exe
+            if errorlevel 1 exit /b 1
+          )
 
           if /I "%BUILD_VARIANT%"=="patched" (
             for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC', [Globalization.CultureInfo]::InvariantCulture)"`) do set "SOURCE_BUILD_TIME_UTC=%%i"
@@ -950,7 +968,7 @@ jobs:
 
       - name: Upload successful Windows package
         id: upload
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Telegram-dev-${{ steps.source.outputs.short_sha }}-Windows-x64-${{ inputs.variant }}-${{ inputs.profile }}
           path: package-output\
