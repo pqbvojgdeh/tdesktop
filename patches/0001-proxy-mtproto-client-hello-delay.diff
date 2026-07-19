@@ -48,10 +48,10 @@ index 3e51338c13..a3f1c5fbc1 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da3..87e12319e3 100644
+index 6d99e31da3..3e2322ac6f 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
-@@ -59,30 +59,85 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -59,30 +59,97 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "styles/style_menu_icons.h"
  #include "styles/style_settings.h"
  
@@ -90,6 +90,12 @@ index 6d99e31da3..87e12319e3 100644
 +	return secret.size() >= 21 && secret[0] == bytes::type(0xEE);
 +}
 +
++[[nodiscard]] QString FormatProxyEndpoint(const QString &host, uint32 port) {
++	return qthelp::is_ipv6(host)
++		? u"[%1]:%2"_q.arg(host).arg(port)
++		: u"%1:%2"_q.arg(host).arg(port);
++}
++
 +[[nodiscard]] QString ClientHelloName(ProxyData::CHelloType type) {
 +	switch (type) {
 +	case ProxyData::CHelloType::Chrome:
@@ -115,7 +121,7 @@ index 6d99e31da3..87e12319e3 100644
 +	if (!status.used) {
 +		return u"Last connection\nNot used yet"_q;
 +	}
-+	auto result = u"Last connection\n"_q;
++	auto result = QString();
 +	if (status.random) {
 +		result += u"Random selection · "_q;
 +	}
@@ -125,8 +131,14 @@ index 6d99e31da3..87e12319e3 100644
 +			? u" · resumed profile"_q
 +			: u" · fresh profile"_q;
 +	}
-+	if (!status.endpoint.isEmpty()) {
-+		result += u"\n"_q + status.endpoint;
++	if (!status.host.isEmpty()) {
++		const auto actual = FormatProxyEndpoint(status.host, status.port);
++		const auto original = FormatProxyEndpoint(proxy.host, proxy.port);
++		const auto resolved = proxy.tryCustomResolve()
++			&& (status.host.compare(proxy.host, Qt::CaseInsensitive) != 0);
++		result += u"\n"_q + (resolved
++			? original + u" → "_q + actual
++			: actual);
 +	}
 +	if (status.chromium150 && status.ttlMinutes > 0) {
 +		result += status.resumed
