@@ -1089,14 +1089,13 @@ index 6d99e31da3..69f6c2333a 100644
  	}, button->lifetime());
  }
  
-@@ -1714,9 +2172,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1714,9 +2172,6 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  		}
  	}, _lifetime);
  
 -	for (auto &item : _list) {
 -		refreshChecker(item);
 -	}
-+	refreshAllChecks();
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
