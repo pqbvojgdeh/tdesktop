@@ -4174,10 +4174,10 @@ index a7dd178b71..30920d1333 100644
  		const auto i = ranges::remove_if(current, [&](const QString &ip) {
  			const auto index = copy.indexOf(ip);
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-index f1f2c5402f..3312743765 100644
+index f1f2c5402f..f1e7f1ed26 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
 +++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
-@@ -7,12 +7,45 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,12 +7,46 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "mtproto/mtproto_proxy_data.h"
  
@@ -4195,7 +4195,8 @@ index f1f2c5402f..3312743765 100644
 +
 +struct StoredCHelloStatus {
 +	ProxyData::CHelloStatus value;
-+	crl::time updatedAt = 0;
++	crl::time connectedAt = 0;
++	crl::time ttlUpdatedAt = 0;
 +};
 +
 +std::vector<StoredCHelloStatus> CHelloStatuses;
@@ -4223,7 +4224,7 @@ index f1f2c5402f..3312743765 100644
  [[nodiscard]] bool IsHexMtprotoPassword(const QString &password) {
  	const auto size = password.size();
  	if (size < 32 || size % 2 == 1) {
-@@ -150,7 +183,10 @@ bool ProxyData::valid() const {
+@@ -150,7 +184,10 @@ bool ProxyData::valid() const {
  }
  
  ProxyData::Status ProxyData::status() const {
@@ -4235,7 +4236,7 @@ index f1f2c5402f..3312743765 100644
  		return Status::Invalid;
  	} else if (type == Type::Mtproto) {
  		return MtprotoPasswordStatus(password);
-@@ -166,7 +202,7 @@ bool ProxyData::tryCustomResolve() const {
+@@ -166,7 +203,7 @@ bool ProxyData::tryCustomResolve() const {
  	static const auto RegExp = QRegularExpression(
  		QStringLiteral("^\\d+\\.\\d+\\.\\d+\\.\\d+$")
  	);
@@ -4244,7 +4245,7 @@ index f1f2c5402f..3312743765 100644
  		&& !qthelp::is_ipv6(host)
  		&& !RegExp.match(host).hasMatch();
  }
-@@ -245,4 +281,157 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
+@@ -245,4 +282,159 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
  		proxy.password);
  }
  
@@ -4264,6 +4265,7 @@ index f1f2c5402f..3312743765 100644
 +
 +void ProxyData::setGlobalCHelloStatus(const ProxyData::CHelloStatus &status) {
 +	const QMutexLocker lock(&CHelloStatusMutex);
++	const auto now = crl::now();
 +	const auto sameEndpoint = [&](const StoredCHelloStatus &entry) {
 +		return entry.value.port == status.port
 +			&& !entry.value.host.compare(status.host, Qt::CaseInsensitive)
@@ -4272,15 +4274,16 @@ index f1f2c5402f..3312743765 100644
 +	if (const auto i = ranges::find_if(CHelloStatuses, sameEndpoint);
 +		i != end(CHelloStatuses)) {
 +		i->value = status;
-+		i->updatedAt = crl::now();
++		i->connectedAt = now;
++		i->ttlUpdatedAt = now;
 +	} else {
-+		CHelloStatuses.push_back({ status, crl::now() });
++		CHelloStatuses.push_back({ status, now, now });
 +		if (CHelloStatuses.size() > kMaximumStoredCHelloStatuses) {
 +			const auto oldest = std::min_element(
 +				begin(CHelloStatuses),
 +				end(CHelloStatuses),
 +				[](const auto &a, const auto &b) {
-+					return a.updatedAt < b.updatedAt;
++					return a.connectedAt < b.connectedAt;
 +				});
 +			CHelloStatuses.erase(oldest);
 +		}
@@ -4302,7 +4305,7 @@ index f1f2c5402f..3312743765 100644
 +		i != end(CHelloStatuses)) {
 +		i->value.ttlMinutes = std::max(ttlMinutes, 0);
 +		i->value.ttlLeftMinutes = i->value.ttlMinutes;
-+		i->updatedAt = crl::now();
++		i->ttlUpdatedAt = crl::now();
 +	}
 +}
 +
@@ -4336,7 +4339,7 @@ index f1f2c5402f..3312743765 100644
 +		auto result = (const StoredCHelloStatus*)nullptr;
 +		for (const auto &entry : CHelloStatuses) {
 +			if (matches(entry)
-+				&& (!result || entry.updatedAt >= result->updatedAt)) {
++				&& (!result || entry.connectedAt >= result->connectedAt)) {
 +				result = &entry;
 +			}
 +		}
@@ -4348,7 +4351,7 @@ index f1f2c5402f..3312743765 100644
 +	auto result = newest->value;
 +	if (result.chromium150 && result.ttlLeftMinutes > 0) {
 +		const auto elapsedMinutes = std::clamp(
-+			(crl::now() - newest->updatedAt) / crl::time(60 * 1000),
++			(crl::now() - newest->ttlUpdatedAt) / crl::time(60 * 1000),
 +			crl::time(0),
 +			crl::time(result.ttlLeftMinutes));
 +		result.ttlLeftMinutes = std::max(
