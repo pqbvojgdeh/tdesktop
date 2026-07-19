@@ -1,5 +1,5 @@
 diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
-index 34b5e9cc3..797648a63 100644
+index 34b5e9cc3f..797648a634 100644
 --- a/Telegram/SourceFiles/window/window.style
 +++ b/Telegram/SourceFiles/window/window.style
 @@ -112,7 +112,7 @@ mainMenuCoverNameTop: 84px;
@@ -27,7 +27,7 @@ index 34b5e9cc3..797648a63 100644
  mainMenuToggleSize: 6px;
  mainMenuToggleFourStrokes: 3px;
 diff --git a/Telegram/SourceFiles/window/window_main_menu.cpp b/Telegram/SourceFiles/window/window_main_menu.cpp
-index 89ecba366..1b00965b3 100644
+index f6f0985397..23d7089cf1 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu.cpp
 @@ -341,7 +341,9 @@ MainMenu::MainMenu(
@@ -49,7 +49,7 @@ index 89ecba366..1b00965b3 100644
  	}, _footer->lifetime());
  
  	rpl::combine(
-@@ -387,22 +390,31 @@ MainMenu::MainMenu(
+@@ -387,22 +390,32 @@ MainMenu::MainMenu(
  		u"Telegram Desktop"_q,
  		u"https://desktop.telegram.org"_q));
  	_telegram->setLinksTrusted();
@@ -67,7 +67,7 @@ index 89ecba366..1b00965b3 100644
 +	const auto sourceCommitShort = u"__TDESKTOP_COMMIT_SHORT__"_q;
 +	const auto sourceCommitUrl = u"https://github.com/telegramdesktop/tdesktop/commit/__TDESKTOP_COMMIT_FULL__"_q;
  	_version->setMarkedText(
- 		tr::link(
+-		tr::link(
 -			tr::lng_settings_current_version(
 -				tr::now,
 -				lt_version,
@@ -77,15 +77,14 @@ index 89ecba366..1b00965b3 100644
 -		.append(QChar(8211))
 -		.append(QChar(' '))
 -		.append(tr::link(tr::lng_menu_about(tr::now), 2))); // Link 2.
-+			currentVersionText()
-+				.append(u" · "_q)
-+				.append(sourceCommitShort),
-+			1)); // Link 1.
++		tr::link(currentVersionText(), 1)
++			.append(u" · "_q)
++			.append(tr::link(sourceCommitShort, 2)));
  	_version->setLink(
  		1,
--		std::make_shared<UrlClickHandler>(Core::App().changelogLink()));
--	_version->setLink(
--		2,
+ 		std::make_shared<UrlClickHandler>(Core::App().changelogLink()));
+ 	_version->setLink(
+ 		2,
 +		std::make_shared<SourceCommitClickHandler>(sourceCommitUrl));
 +	_about->setMarkedText(tr::link(tr::lng_menu_about(tr::now), 1));
 +	_about->setLink(
@@ -94,10 +93,10 @@ index 89ecba366..1b00965b3 100644
  			controller->show(Box(AboutBox));
  		}));
 diff --git a/Telegram/SourceFiles/window/window_main_menu.h b/Telegram/SourceFiles/window/window_main_menu.h
-index 36a3087a0..552233b9a 100644
+index 5975e0e60d..57f09d55f3 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.h
 +++ b/Telegram/SourceFiles/window/window_main_menu.h
-@@ -103,6 +103,7 @@ private:
+@@ -105,6 +105,7 @@ private:
  	not_null<Ui::RpWidget*> _footer;
  	not_null<Ui::FlatLabel*> _telegram;
  	not_null<Ui::FlatLabel*> _version;
@@ -106,7 +105,7 @@ index 36a3087a0..552233b9a 100644
  	rpl::event_stream<bool> _nightThemeSwitches;
  	base::Timer _nightThemeSwitch;
 diff --git a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
-index 7ee2c7b0d..4c9bf5309 100644
+index 7ee2c7b0d7..4c9bf53096 100644
 --- a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
 @@ -46,9 +46,7 @@ namespace Window {

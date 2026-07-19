@@ -72,8 +72,15 @@ int main() {
 		}, start);
 		Expect(longest == Minutes(20),
 			"The displayed window must use the longest issued ticket.");
-		Expect(cache.ticketCount(1, start + Minutes(10)) == 1,
-			"Tickets must expire independently.");
+		const auto taken = cache.takeWithRemaining(1, start);
+		Expect(taken.taken,
+			"A confirmed endpoint must provide a resumable ticket.");
+		Expect(taken.maximumRemaining == Minutes(10),
+			"Taking a ticket must report the actual remaining window.");
+		Expect(cache.ticketCount(1, start + Minutes(9)) == 1,
+			"The remaining ticket must survive before its deadline.");
+		Expect(cache.ticketCount(1, start + Minutes(10)) == 0,
+			"The remaining ticket must expire at its own deadline.");
 	}
 
 	{
@@ -82,7 +89,7 @@ int main() {
 		(void)cache.confirm(2, [] { return Minutes(20); }, start);
 		(void)cache.confirm(3, [] { return Minutes(30); }, start);
 		Expect(cache.ticketCount(1, start) == 0,
-			"The oldest endpoint must be evicted at capacity.");
+			"The earliest-expiring endpoint must be evicted at capacity.");
 		Expect(cache.ticketCount(2, start) == 2,
 			"A newer endpoint must survive capacity pruning.");
 		Expect(cache.ticketCount(3, start) == 2,
