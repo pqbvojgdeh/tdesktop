@@ -48,7 +48,7 @@ index 3e51338c13..a3f1c5fbc1 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da3..3abc8c37fc 100644
+index 6d99e31da3..ccfa12c4af 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -59,30 +59,84 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -512,7 +512,7 @@ index 6d99e31da3..3abc8c37fc 100644
 -				st::proxyUsePadding.top(),
 -				0,
 -				st::proxyUsePadding.bottom())),
-+			u"For hostnames only. The other address family remains available as fallback."_q,
++			u"Hostnames only."_q,
 +			st::boxDividerLabel),
 +		st::proxyAboutPadding);
 +
