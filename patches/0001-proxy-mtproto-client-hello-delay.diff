@@ -1725,10 +1725,10 @@ index 5de98bc663..85f0dfca6a 100644
  
  	ProxyData _lastSelectedProxy;
 diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
-index 9be1f88a3a..9ef59cbce2 100644
+index 9be1f88a3a..0031e94faf 100644
 --- a/Telegram/SourceFiles/core/application.cpp
 +++ b/Telegram/SourceFiles/core/application.cpp
-@@ -845,6 +845,14 @@ void Application::setCurrentProxy(
+@@ -845,6 +845,16 @@ void Application::setCurrentProxy(
  	proxyRotationSettingsChanged();
  }
  
@@ -1737,6 +1737,8 @@ index 9be1f88a3a..9ef59cbce2 100644
 +	const auto current = settings.isEnabled()
 +		? settings.selected()
 +		: MTP::ProxyData();
++	// Equal endpoints intentionally request a restart without reinitializing
++	// the authorization connection for every account.
 +	_proxyChanges.fire({ current, current });
 +}
 +
@@ -2831,10 +2833,10 @@ index 0000000000..de5a1c7fd6
 +
 +} // namespace MTP::details
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a556..acfc841105 100644
+index 448190a556..36b6117c78 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -7,36 +7,865 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,36 +7,986 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "mtproto/details/mtproto_tls_socket.h"
  
@@ -2848,9 +2850,11 @@ index 448190a556..acfc841105 100644
  #include "base/invoke_queued.h"
  #include "base/random.h"
  #include "base/unixtime.h"
++#include <atomic>
 +#include <chrono>
 +#include <array>
 +#include <map>
++#include <memory>
 +#include <tuple>
 +
 +#include <openssl/core_names.h>
@@ -2878,6 +2882,125 @@ index 448190a556..acfc841105 100644
 +constexpr auto kClientPartSize = 2878;
 +const auto kClientPrefix = qstr("\x14\x03\x03\x00\x01\x01");
 +const auto kClientHeader = qstr("\x17\x03\x03");
++
++namespace sc = std::chrono;
++using SlowConnectEndpoint = std::pair<QString, int>;
++
++struct SlowConnectSlot {
++	sc::steady_clock::time_point next;
++	int pending = 0;
++};
++
++[[nodiscard]] QMutex &SlowConnectMutex() {
++	static auto result = new QMutex();
++	return *result;
++}
++
++[[nodiscard]] std::map<SlowConnectEndpoint, SlowConnectSlot> &
++SlowConnectSlots() {
++	static auto result = new std::map<SlowConnectEndpoint, SlowConnectSlot>();
++	return *result;
++}
++
++class SlowConnectReservation final {
++public:
++	explicit SlowConnectReservation(SlowConnectEndpoint endpoint)
++	: _endpoint(std::move(endpoint)) {
++	}
++
++	~SlowConnectReservation() {
++		release();
++	}
++
++	void release() {
++		if (_released.exchange(true)) {
++			return;
++		}
++		const QMutexLocker lock(&SlowConnectMutex());
++		auto &slots = SlowConnectSlots();
++		if (const auto i = slots.find(_endpoint); i != end(slots)) {
++			i->second.pending = std::max(i->second.pending - 1, 0);
++			if (i->second.pending == 0
++				&& i->second.next <= sc::steady_clock::now()) {
++				slots.erase(i);
++			}
++		}
++	}
++
++private:
++	const SlowConnectEndpoint _endpoint;
++	std::atomic_bool _released = false;
++};
++
++struct SlowConnectSchedule {
++	sc::milliseconds waitFor{ 0 };
++	std::shared_ptr<SlowConnectReservation> reservation;
++	bool overflow = false;
++};
++
++[[nodiscard]] SlowConnectSchedule ReserveSlowConnect(
++		const SlowConnectEndpoint &endpoint,
++		int delay,
++		int jitter) {
++	auto result = SlowConnectSchedule();
++	const QMutexLocker lock(&SlowConnectMutex());
++	auto &slots = SlowConnectSlots();
++	const auto now = sc::steady_clock::now();
++	for (auto i = slots.begin(); i != slots.end();) {
++		i = (i->second.pending == 0 && i->second.next <= now)
++			? slots.erase(i)
++			: std::next(i);
++	}
++	const auto extra = jitter
++		? QRandomGenerator::global()->bounded(jitter + 1)
++		: 0;
++	const auto gap = std::min(
++		sc::milliseconds(delay + extra),
++		kMaximumDelayedConnect);
++	auto &slot = slots[endpoint];
++	if (slot.next.time_since_epoch().count() != 0) {
++		if (now < slot.next) {
++			result.waitFor = sc::duration_cast<sc::milliseconds>(
++				slot.next - now);
++		} else {
++			slot.next = now;
++		}
++	}
++	const auto maximum = now + kMaximumDelayedConnect;
++	const auto next = slot.next.time_since_epoch().count() == 0
++		? now + gap
++		: slot.next + gap;
++	result.overflow = (slot.pending >= kMaximumPendingDelayedConnects)
++		|| (next > maximum);
++	if (!result.overflow) {
++		slot.next = next;
++		if (result.waitFor.count() > 0) {
++			++slot.pending;
++			result.reservation = std::make_shared<SlowConnectReservation>(
++				endpoint);
++		}
++	}
++	return result;
++}
++
++[[nodiscard]] bool ValidateSlowConnectReservationForTests() {
++	const auto endpoint = SlowConnectEndpoint(
++		u"slow-connect-reservation-test.invalid"_q,
++		1);
++	{
++		const QMutexLocker lock(&SlowConnectMutex());
++		SlowConnectSlots()[endpoint] = {
++			sc::steady_clock::now() - sc::milliseconds(1),
++			1,
++		};
++	}
++	{
++		const auto reservation = std::make_shared<SlowConnectReservation>(
++			endpoint);
++	}
++	const QMutexLocker lock(&SlowConnectMutex());
++	return !SlowConnectSlots().contains(endpoint);
++}
 +
 +using BigNum = openssl::BigNum;
 +using BigNumContext = openssl::Context;
@@ -3710,16 +3833,16 @@ index 448190a556..acfc841105 100644
 +	CloseScope();
 +	CloseScope();
 +	CloseScope();
-+
-+	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
-+}
  
 -[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules() {
++	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
++}
++
 +[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules_Chromium150(const bool resumed) {
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -76,9 +905,6 @@ using BigNumContext = openssl::Context;
+@@ -76,9 +1026,6 @@ using BigNumContext = openssl::Context;
  	const auto E = [&] {
  		pushToBack(MTP_tlsBlockE());
  	};
@@ -3729,7 +3852,7 @@ index 448190a556..acfc841105 100644
  	const auto OpenScope = [&] {
  		stack.emplace_back(Scope());
  	};
-@@ -135,8 +961,9 @@ using BigNumContext = openssl::Context;
+@@ -135,8 +1082,9 @@ using BigNumContext = openssl::Context;
  	G(0);
  	S(""
  		"\x13\x01\x13\x02\x13\x03\xc0\x2b\xc0\x2f\xc0\x2c\xc0\x30\xcc\xa9"
@@ -3740,7 +3863,7 @@ index 448190a556..acfc841105 100644
  	OpenScope();
  	G(2);
  	S("\x00\x00"_q);
-@@ -165,8 +992,8 @@ using BigNumContext = openssl::Context;
+@@ -165,8 +1113,8 @@ using BigNumContext = openssl::Context;
  		}
  		StartPermutationElement(); {
  			S(""
@@ -3751,7 +3874,7 @@ index 448190a556..acfc841105 100644
  		}
  		StartPermutationElement(); {
  			S(""
-@@ -223,7 +1050,19 @@ using BigNumContext = openssl::Context;
+@@ -223,7 +1171,19 @@ using BigNumContext = openssl::Context;
  	} ClosePermutation();
  	G(3);
  	S("\x00\x01\x00"_q);
@@ -3772,7 +3895,7 @@ index 448190a556..acfc841105 100644
  	CloseScope();
  	CloseScope();
  	CloseScope();
-@@ -231,6 +1070,136 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +1191,136 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -3909,7 +4032,7 @@ index 448190a556..acfc841105 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -246,8 +1215,8 @@ using BigNumContext = openssl::Context;
+@@ -246,8 +1336,8 @@ using BigNumContext = openssl::Context;
  	return result;
  }
  
@@ -3920,7 +4043,7 @@ index 448190a556..acfc841105 100644
  	if (!context) {
  		return {};
  	}
-@@ -271,7 +1240,9 @@ using BigNumContext = openssl::Context;
+@@ -271,7 +1361,9 @@ using BigNumContext = openssl::Context;
  	if (!EVP_PKEY_get_raw_public_key(key, nullptr, &length)) {
  		return {};
  	}
@@ -3931,7 +4054,7 @@ index 448190a556..acfc841105 100644
  
  	auto result = bytes::vector(length);
  	const auto code = EVP_PKEY_get_raw_public_key(
-@@ -281,6 +1252,56 @@ using BigNumContext = openssl::Context;
+@@ -281,6 +1373,56 @@ using BigNumContext = openssl::Context;
  	if (!code) {
  		return {};
  	}
@@ -3988,7 +4111,7 @@ index 448190a556..acfc841105 100644
  	return result;
  }
  
-@@ -304,7 +1325,7 @@ private:
+@@ -304,7 +1446,7 @@ private:
  			bytes::const_span domain,
  			const bytes::vector &greases);
  
@@ -3997,7 +4120,7 @@ index 448190a556..acfc841105 100644
  		void writeBlocks(const QVector<MTPTlsBlock> &blocks);
  		void writeBlock(const MTPTlsBlock &data);
  		void writeBlock(const MTPDtlsBlockString &data);
-@@ -313,6 +1334,7 @@ private:
+@@ -313,6 +1455,7 @@ private:
  		void writeBlock(const MTPDtlsBlockRandom &data);
  		void writeBlock(const MTPDtlsBlockDomain &data);
  		void writeBlock(const MTPDtlsBlockPublicKey &data);
@@ -4005,7 +4128,7 @@ index 448190a556..acfc841105 100644
  		void writeBlock(const MTPDtlsBlockScope &data);
  		void writeBlock(const MTPDtlsBlockPermutation &data);
  		void writeBlock(const MTPDtlsBlockM &data);
-@@ -362,16 +1384,16 @@ QByteArray Generator::Part::take() {
+@@ -362,16 +1505,16 @@ QByteArray Generator::Part::take() {
  	return _error ? QByteArray() : std::move(_result);
  }
  
@@ -4026,7 +4149,7 @@ index 448190a556..acfc841105 100644
  	return bytes::make_detached_span(_result).subspan(offset);
  }
  
-@@ -411,7 +1433,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
+@@ -411,7 +1554,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
  
  void Generator::Part::writeBlock(const MTPDtlsBlockGrease &data) {
  	const auto seed = data.vseed().v;
@@ -4035,7 +4158,7 @@ index 448190a556..acfc841105 100644
  		_error = true;
  		return;
  	}
-@@ -440,7 +1462,16 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
+@@ -440,7 +1583,16 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
  }
  
  void Generator::Part::writeBlock(const MTPDtlsBlockPublicKey &data) {
@@ -4053,7 +4176,7 @@ index 448190a556..acfc841105 100644
  	const auto storage = grow(key.size());
  	if (storage.empty()) {
  		return;
-@@ -494,10 +1525,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
+@@ -494,10 +1646,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
  	bytes::set_random(random);
  
  	auto chars = reinterpret_cast<char*>(storage.data());
@@ -4069,7 +4192,7 @@ index 448190a556..acfc841105 100644
  		*chars++ = (char)(a & 255);
  		*chars++ = (char)((a >> 8) + ((b & 15) << 4));
  		*chars++ = (char)(b >> 4);
-@@ -523,7 +1556,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
+@@ -523,7 +1677,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
  void Generator::Part::finalize(bytes::const_span key) {
  	if (_error) {
  		return;
@@ -4079,7 +4202,7 @@ index 448190a556..acfc841105 100644
  		_error = true;
  		return;
  	}
-@@ -532,7 +1566,8 @@ void Generator::Part::finalize(bytes::const_span key) {
+@@ -532,7 +1687,8 @@ void Generator::Part::finalize(bytes::const_span key) {
  }
  
  QByteArray Generator::Part::extractDigest() const {
@@ -4089,7 +4212,7 @@ index 448190a556..acfc841105 100644
  		return {};
  	}
  	return _result.mid(_digestPosition, kHelloDigestLength);
-@@ -576,8 +1611,15 @@ ClientHello Generator::take() {
+@@ -576,8 +1732,15 @@ ClientHello Generator::take() {
  [[nodiscard]] ClientHello PrepareClientHello(
  		const MTPTlsClientHello &rules,
  		bytes::const_span domain,
@@ -4107,11 +4230,14 @@ index 448190a556..acfc841105 100644
  }
  
  [[nodiscard]] bool CheckPart(bytes::const_span data, QLatin1String check) {
-@@ -597,6 +1639,36 @@ ClientHello Generator::take() {
+@@ -597,6 +1760,39 @@ ClientHello Generator::take() {
  
  } // namespace
  
 +bool ValidateClientHelloProfilesForTests() {
++	if (!ValidateSlowConnectReservationForTests()) {
++		return false;
++	}
 +	const auto domain = QByteArray("example.com");
 +	const auto key = bytes::vector(16, bytes::type(0x42));
 +	const auto check = [&](const MTPTlsClientHello &rules,
@@ -4144,7 +4270,7 @@ index 448190a556..acfc841105 100644
  TlsSocket::TlsSocket(
  	not_null<QThread*> thread,
  	const bytes::vector &secret,
-@@ -653,11 +1725,25 @@ void TlsSocket::plainConnected() {
+@@ -653,11 +1849,25 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -4174,7 +4300,7 @@ index 448190a556..acfc841105 100644
  	if (hello.data.isEmpty()) {
  		logError(888, "Could not generate Client Hello.");
  		_state = State::Error;
-@@ -671,6 +1757,7 @@ void TlsSocket::plainConnected() {
+@@ -671,6 +1881,7 @@ void TlsSocket::plainConnected() {
  
  void TlsSocket::plainDisconnected() {
  	_state = State::NotConnected;
@@ -4182,7 +4308,7 @@ index 448190a556..acfc841105 100644
  	_incoming = QByteArray();
  	_serverHelloLength = 0;
  	_incomingGoodDataOffset = 0;
-@@ -699,6 +1786,11 @@ void TlsSocket::readHello() {
+@@ -699,6 +1910,11 @@ void TlsSocket::readHello() {
  			return;
  		}
  		_incoming.append(_socket.readAll());
@@ -4194,7 +4320,7 @@ index 448190a556..acfc841105 100644
  	}
  	checkHelloParts12(parts1Size);
  }
-@@ -794,6 +1886,19 @@ void TlsSocket::checkHelloDigest() {
+@@ -794,6 +2010,19 @@ void TlsSocket::checkHelloDigest() {
  	}
  	_incomingGoodDataOffset = _incomingGoodDataLimit = 0;
  	_state = State::Connected;
@@ -4214,61 +4340,18 @@ index 448190a556..acfc841105 100644
  	_connected.fire({});
  }
  
-@@ -854,6 +1959,87 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -854,6 +2083,35 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
 +	_address = address;
 +	_port = port;
 +	if (MTP::ProxyData::globalSlowMode()) {
-+		namespace sc = std::chrono;
-+		struct Slot {
-+			sc::steady_clock::time_point next;
-+			int pending = 0;
-+		};
-+		static QMutex mutex;
-+		static auto slots = std::map<std::pair<QString, int>, Slot>();
 +		const auto delay = qMax(0, MTP::ProxyData::globalSlowDelay());
 +		const auto jitter = qMax(0, MTP::ProxyData::globalSlowJitter());
-+		const auto endpoint = std::make_pair(address, port);
-+
-+		sc::milliseconds waitFor{0};
-+		auto overflow = false;
-+		{
-+			const QMutexLocker lock(&mutex);
-+			const auto now = sc::steady_clock::now();
-+			for (auto i = slots.begin(); i != slots.end();) {
-+				i = (i->second.pending == 0 && i->second.next <= now)
-+					? slots.erase(i)
-+					: std::next(i);
-+			}
-+			const auto extra = jitter ? QRandomGenerator::global()->bounded(jitter + 1) : 0;
-+			const auto gap = std::min(
-+				sc::milliseconds(delay + extra),
-+				kMaximumDelayedConnect);
-+			auto &slot = slots[endpoint];
-+			if (slot.next.time_since_epoch().count() != 0) {
-+				if (now < slot.next) {
-+					waitFor = sc::duration_cast<sc::milliseconds>(
-+						slot.next - now);
-+				} else {
-+					slot.next = now;
-+				}
-+			}
-+			const auto maximum = now + kMaximumDelayedConnect;
-+			const auto next = slot.next.time_since_epoch().count() == 0
-+				? now + gap
-+				: slot.next + gap;
-+			overflow = (slot.pending >= kMaximumPendingDelayedConnects)
-+				|| (next > maximum);
-+			if (!overflow) {
-+				slot.next = next;
-+				if (waitFor.count() > 0) {
-+					++slot.pending;
-+				}
-+			}
-+		}
-+		if (overflow) {
++		const auto endpoint = SlowConnectEndpoint(address, port);
++		const auto schedule = ReserveSlowConnect(endpoint, delay, jitter);
++		if (schedule.overflow) {
 +			QTimer::singleShot(0, this, [=] {
 +				if (_state == State::Connecting) {
 +					logError(888, "Slow-mode connection queue is full.");
@@ -4278,20 +4361,11 @@ index 448190a556..acfc841105 100644
 +			});
 +			return;
 +		}
-+		if (waitFor.count() > 0) {
++		if (schedule.waitFor.count() > 0) {
 +			const auto _address = address;
 +			const auto _port    = port;
-+			QTimer::singleShot(waitFor.count(), this, [=] {
-+				{
-+					const QMutexLocker lock(&mutex);
-+					if (const auto i = slots.find(endpoint); i != end(slots)) {
-+						i->second.pending = std::max(i->second.pending - 1, 0);
-+						if (i->second.pending == 0
-+							&& i->second.next <= sc::steady_clock::now()) {
-+							slots.erase(i);
-+						}
-+					}
-+				}
++			QTimer::singleShot(schedule.waitFor.count(), this, [=] {
++				schedule.reservation->release();
 +				if (_state == State::Connecting) {
 +					_socket.connectToHost(_address, _port);
 +				}
@@ -4302,7 +4376,7 @@ index 448190a556..acfc841105 100644
  	_socket.connectToHost(address, port);
  }
  
-@@ -954,6 +2140,7 @@ void TlsSocket::handleError(int errorCode) {
+@@ -954,6 +2212,7 @@ void TlsSocket::handleError(int errorCode) {
  		logError(errorCode, _socket.errorString());
  	}
  	_state = State::Error;

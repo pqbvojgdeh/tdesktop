@@ -87,6 +87,8 @@ struct HelloOptions {
 	bool omitPskModes = false;
 	bool extraBinder = false;
 	bool duplicateKeyShare = false;
+	bool duplicatePskModes = false;
+	bool duplicatePsk = false;
 };
 
 [[nodiscard]] Bytes MakeHello(HelloOptions options = {}) {
@@ -104,8 +106,17 @@ struct HelloOptions {
 				extensions,
 				0x002D,
 				Bytes{ std::byte(1), std::byte(1) });
+			if (options.duplicatePskModes) {
+				Extension(
+					extensions,
+					0x002D,
+					Bytes{ std::byte(1), std::byte(1) });
+			}
 		}
 		Extension(extensions, 0x0029, MakePsk(options.extraBinder));
+		if (options.duplicatePsk) {
+			Extension(extensions, 0x0029, MakePsk(false));
+		}
 	}
 	if (options.extensionAfterPsk) {
 		Extension(extensions, 0x0017, {});
@@ -186,6 +197,16 @@ int main() {
 		"The identity and binder counts must match.");
 	Expect(!Validate(MakeHello({ .duplicateKeyShare = true }), 0).valid,
 		"A duplicate key-share extension must fail.");
+	Expect(!Validate(MakeHello({
+		.resumed = true,
+		.duplicatePskModes = true,
+	}), 1).valid,
+		"Duplicate PSK key-exchange modes must fail.");
+	Expect(!Validate(MakeHello({
+		.resumed = true,
+		.duplicatePsk = true,
+	}), 1).valid,
+		"Duplicate pre-shared-key extensions must fail.");
 
 	std::cout << "ClientHello validation tests passed." << std::endl;
 	return 0;
