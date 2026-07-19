@@ -2409,12 +2409,14 @@ index 571e14eb38..a6e242556b 100644
  	_timeoutTimer.cancel();
  	if (_ipIndex >= 0) {
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a556..309c2f99ea 100644
+index 448190a556..81bb6ba85f 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -8,20 +8,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -8,20 +8,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "mtproto/details/mtproto_tls_socket.h"
  
++#include "mtproto/details/mtproto_chromium_session_cache.h"
++
  #include "mtproto/details/mtproto_tcp_socket.h"
 +#include "mtproto/mtproto_proxy_data.h"
 +#include "core/core_settings_proxy.h"
@@ -2453,7 +2455,7 @@ index 448190a556..309c2f99ea 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -231,6 +241,975 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +243,935 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -3280,12 +3282,6 @@ index 448190a556..309c2f99ea 100644
 +
 +using Chromium150EndpointKey = std::tuple<QString, int, QByteArray>;
 +
-+struct Chromium150EndpointState {
-+	std::chrono::steady_clock::time_point expiresAt;
-+	std::chrono::minutes ttl;
-+	int tickets = 0;
-+};
-+
 +struct ClientHelloSelection {
 +	const MTPTlsClientHello *rules = nullptr;
 +	ProxyData::CHelloType configured = ProxyData::CHelloType::Chromium150;
@@ -3295,28 +3291,14 @@ index 448190a556..309c2f99ea 100644
 +
 +constexpr auto kMaximumChromium150EndpointStates = 128;
 +constexpr auto kChromium150TicketSlots = 2;
-+QMutex Chromium150Mutex;
-+std::map<Chromium150EndpointKey, Chromium150EndpointState> Chromium150Endpoints;
-+
-+void PruneChromium150Endpoints(std::chrono::steady_clock::time_point now) {
-+	for (auto i = Chromium150Endpoints.begin(); i != Chromium150Endpoints.end();) {
-+		i = (i->second.expiresAt <= now)
-+			? Chromium150Endpoints.erase(i)
-+			: std::next(i);
-+	}
-+}
++auto Chromium150Sessions = MTP::details::ChromiumSessionCache<
++	Chromium150EndpointKey>(
++		kMaximumChromium150EndpointStates,
++		kChromium150TicketSlots);
 +
 +[[nodiscard]] bool TakeChromium150Ticket(
 +		const Chromium150EndpointKey &key) {
-+	const QMutexLocker lock(&Chromium150Mutex);
-+	const auto now = std::chrono::steady_clock::now();
-+	PruneChromium150Endpoints(now);
-+	const auto i = Chromium150Endpoints.find(key);
-+	if (i == end(Chromium150Endpoints) || i->second.tickets <= 0) {
-+		return false;
-+	}
-+	--i->second.tickets;
-+	return true;
++	return Chromium150Sessions.take(key);
 +}
 +
 +void ConfirmClientHello(
@@ -3329,30 +3311,10 @@ index 448190a556..309c2f99ea 100644
 +	auto ttlMinutes = 0;
 +	if (actual == ProxyData::CHelloType::Chromium150) {
 +		const auto key = Chromium150EndpointKey(address, port, domain);
-+		const QMutexLocker lock(&Chromium150Mutex);
-+		const auto now = std::chrono::steady_clock::now();
-+		PruneChromium150Endpoints(now);
-+		if (!Chromium150Endpoints.contains(key)
-+			&& Chromium150Endpoints.size()
-+				>= kMaximumChromium150EndpointStates) {
-+			const auto oldest = std::min_element(
-+				begin(Chromium150Endpoints),
-+				end(Chromium150Endpoints),
-+				[](const auto &a, const auto &b) {
-+					return a.second.expiresAt < b.second.expiresAt;
-+				});
-+			if (oldest != end(Chromium150Endpoints)) {
-+				Chromium150Endpoints.erase(oldest);
-+			}
-+		}
-+		auto &state = Chromium150Endpoints[key];
-+		if (state.ttl.count() <= 0) {
-+			state.ttl = std::chrono::minutes(
++		ttlMinutes = int(Chromium150Sessions.confirm(key, [] {
++			return std::chrono::minutes(
 +				30 + QRandomGenerator::global()->bounded(31));
-+		}
-+		state.expiresAt = now + state.ttl;
-+		state.tickets = kChromium150TicketSlots;
-+		ttlMinutes = int(state.ttl.count());
++		}).count());
 +	}
 +
 +	auto status = ProxyData::CHelloStatus();
@@ -3894,6 +3856,130 @@ index f1f2c5402f..e72021980f 100644
 +}
 +
  } // namespace MTP
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_chromium_session_cache.h b/Telegram/SourceFiles/mtproto/details/mtproto_chromium_session_cache.h
+new file mode 100644
+index 0000000000..d75af1dc18
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_chromium_session_cache.h
+@@ -0,0 +1,118 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <algorithm>
++#include <chrono>
++#include <cstddef>
++#include <iterator>
++#include <map>
++#include <mutex>
++#include <utility>
++#include <vector>
++
++namespace MTP::details {
++
++template <typename Key>
++class ChromiumSessionCache final {
++public:
++	using Clock = std::chrono::steady_clock;
++	using TimePoint = Clock::time_point;
++	using Lifetime = std::chrono::minutes;
++
++	ChromiumSessionCache(std::size_t maximumEntries, int ticketSlots)
++	: _maximumEntries(maximumEntries)
++	, _ticketSlots(std::max(ticketSlots, 0)) {
++	}
++
++	[[nodiscard]] bool take(const Key &key, TimePoint now = Clock::now()) {
++		const auto lock = std::lock_guard(_mutex);
++		prune(now);
++		const auto i = _entries.find(key);
++		if (i == end(_entries)) {
++			return false;
++		}
++		i->second.pop_back();
++		if (i->second.empty()) {
++			_entries.erase(i);
++		}
++		return true;
++	}
++
++	template <typename LifetimeGenerator>
++	[[nodiscard]] Lifetime confirm(
++			const Key &key,
++			LifetimeGenerator &&generateLifetime,
++			TimePoint now = Clock::now()) {
++		const auto lock = std::lock_guard(_mutex);
++		prune(now);
++		if (!_maximumEntries || !_ticketSlots) {
++			return Lifetime(0);
++		}
++		if (!_entries.contains(key) && _entries.size() >= _maximumEntries) {
++			eraseOldest();
++		}
++		auto tickets = std::vector<TimePoint>();
++		tickets.reserve(_ticketSlots);
++		auto longest = Lifetime(0);
++		for (auto slot = 0; slot != _ticketSlots; ++slot) {
++			const auto lifetime = std::max(
++				Lifetime(1),
++				Lifetime(generateLifetime()));
++			tickets.push_back(now + lifetime);
++			longest = std::max(longest, lifetime);
++		}
++		_entries.insert_or_assign(key, std::move(tickets));
++		return longest;
++	}
++
++	[[nodiscard]] std::size_t ticketCount(
++			const Key &key,
++			TimePoint now = Clock::now()) {
++		const auto lock = std::lock_guard(_mutex);
++		prune(now);
++		const auto i = _entries.find(key);
++		return (i == end(_entries)) ? 0 : i->second.size();
++	}
++
++private:
++	using Tickets = std::vector<TimePoint>;
++
++	void prune(TimePoint now) {
++		for (auto i = _entries.begin(); i != _entries.end();) {
++			auto &tickets = i->second;
++			tickets.erase(
++				std::remove_if(
++					begin(tickets),
++					end(tickets),
++					[=](TimePoint expiry) { return expiry <= now; }),
++				end(tickets));
++			i = tickets.empty() ? _entries.erase(i) : std::next(i);
++		}
++	}
++
++	void eraseOldest() {
++		const auto oldest = std::min_element(
++			begin(_entries),
++			end(_entries),
++			[](const auto &a, const auto &b) {
++				return *std::max_element(begin(a.second), end(a.second))
++					< *std::max_element(begin(b.second), end(b.second));
++			});
++		if (oldest != end(_entries)) {
++			_entries.erase(oldest);
++		}
++	}
++
++	const std::size_t _maximumEntries;
++	const int _ticketSlots;
++	std::mutex _mutex;
++	std::map<Key, Tickets> _entries;
++};
++
++} // namespace MTP::details
 diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
 index 367ee3f523..b54ce31312 100644
 --- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h

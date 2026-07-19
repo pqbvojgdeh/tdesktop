@@ -386,6 +386,40 @@ jobs:
           Write-Host "Compiler=$compiler"
           Write-Host "Compiler version=$($compilerInfo.FileVersion)"
 
+      - name: Run Chromium 150 session-cache tests
+        if: ${{ inputs.variant == 'patched' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $sourceDir = Join-Path $env:TBUILD $env:REPO_NAME
+          $testSource = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "patch-source\patches\tests\chromium150_ticket_cache_test.cpp"
+          $testBinary = Join-Path `
+            $env:RUNNER_TEMP `
+            "chromium150_ticket_cache_test.exe"
+
+          & cl.exe `
+            /nologo `
+            /std:c++20 `
+            /EHsc `
+            /W4 `
+            /WX `
+            "/I$sourceDir\Telegram\SourceFiles" `
+            $testSource `
+            "/Fe:$testBinary"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chromium 150 session-cache test compilation failed."
+          }
+
+          & $testBinary
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chromium 150 session-cache tests failed."
+          }
+
       - name: Resolve Visual Studio 2026 instance for CMake
         if: ${{ inputs.generator == 'official' }}
         shell: pwsh
