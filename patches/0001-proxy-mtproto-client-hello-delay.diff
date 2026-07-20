@@ -1,17 +1,19 @@
 diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
-index 5476f7ed33..782109710e 100644
+index 5476f7ed33..2917b906f2 100644
 --- a/Telegram/CMakeLists.txt
 +++ b/Telegram/CMakeLists.txt
-@@ -39,6 +39,10 @@ include(cmake/td_ui.cmake)
- include(cmake/telegram_apple_swift_runtime.cmake)
- include(cmake/generate_appstream_changelog.cmake)
+@@ -90,6 +90,12 @@ PRIVATE
+     desktop-app::external_xxhash
+ )
  
 +if (DESKTOP_APP_MTPROTO_PROFILE_TESTS)
-+    include(cmake/mtproto_profile_tests.cmake)
++    target_compile_definitions(Telegram PRIVATE
++        DESKTOP_APP_MTPROTO_PROFILE_TESTS
++    )
 +endif()
 +
- if (DESKTOP_APP_TEST_APPS)
-     include(cmake/tests.cmake)
+ if (NOT DESKTOP_APP_DISABLE_SWIFT6)
+     telegram_add_apple_swift_runtime(Telegram)
  endif()
 diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
 index 3e51338c13..a3f1c5fbc1 100644
@@ -2448,6 +2450,33 @@ index c1fee27696..9aee7bce96 100644
  	rpl::lifetime _lifetime;
  
  };
+diff --git a/Telegram/SourceFiles/main.cpp b/Telegram/SourceFiles/main.cpp
+index d3d938c47f..d50118cd38 100644
+--- a/Telegram/SourceFiles/main.cpp
++++ b/Telegram/SourceFiles/main.cpp
+@@ -7,7 +7,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "core/launcher.h"
+ 
++#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
++#include "mtproto/details/mtproto_tls_socket.h"
++
++#include <QtCore/QCoreApplication>
++
++#include <cstring>
++#endif
++
+ int main(int argc, char *argv[]) {
++#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
++	if (argc == 2
++		&& !std::strcmp(argv[1], "--validate-mtproto-client-hello")) {
++		const auto application = QCoreApplication(argc, argv);
++		return MTP::details::ValidateClientHelloProfilesForTests() ? 0 : 1;
++	}
++#endif
+ 	const auto launcher = Core::Launcher::Create(argc, argv);
+ 	return launcher ? launcher->exec() : 1;
+ }
 diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
 index 571e14eb38..a6e242556b 100644
 --- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
@@ -5068,77 +5097,6 @@ index 76225965bf..d290433068 100644
  tlsBlockScope entries:Vector<TlsBlock> = TlsBlock;
  tlsBlockPermutation entries:Vector<Vector<TlsBlock>> = TlsBlock;
  tlsBlockM = TlsBlock;
-diff --git a/Telegram/SourceFiles/tests/test_mtproto_client_hello.cpp b/Telegram/SourceFiles/tests/test_mtproto_client_hello.cpp
-new file mode 100644
-index 0000000000..d641847a92
---- /dev/null
-+++ b/Telegram/SourceFiles/tests/test_mtproto_client_hello.cpp
-@@ -0,0 +1,24 @@
-+/*
-+This file is part of Telegram Desktop,
-+the official desktop application for the Telegram messaging service.
-+
-+For license and copyright information please follow this link:
-+https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
-+*/
-+#include "mtproto/details/mtproto_tls_socket.h"
-+
-+#include <QCoreApplication>
-+
-+#include <iostream>
-+
-+int main(int argc, char *argv[]) {
-+	const auto application = QCoreApplication(argc, argv);
-+	if (!MTP::details::ValidateClientHelloProfilesForTests()) {
-+		std::cerr << "Production ClientHello profile validation failed."
-+			<< std::endl;
-+		return 1;
-+	}
-+	std::cout << "Production ClientHello profiles passed."
-+		<< std::endl;
-+	return 0;
-+}
-diff --git a/Telegram/cmake/mtproto_profile_tests.cmake b/Telegram/cmake/mtproto_profile_tests.cmake
-new file mode 100644
-index 0000000000..7d51ca7b9f
---- /dev/null
-+++ b/Telegram/cmake/mtproto_profile_tests.cmake
-@@ -0,0 +1,35 @@
-+# This file is part of Telegram Desktop,
-+# the official desktop application for the Telegram messaging service.
-+#
-+# For license and copyright information please follow this link:
-+# https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
-+
-+add_executable(test_mtproto_client_hello)
-+init_target(test_mtproto_client_hello "(tests)")
-+
-+target_include_directories(test_mtproto_client_hello PRIVATE ${src_loc})
-+
-+target_precompile_headers(test_mtproto_client_hello PRIVATE
-+    ${src_loc}/mtproto/mtproto_pch.h
-+)
-+
-+nice_target_sources(test_mtproto_client_hello ${src_loc}
-+PRIVATE
-+    tests/test_mtproto_client_hello.cpp
-+)
-+
-+target_link_libraries(test_mtproto_client_hello
-+PRIVATE
-+    tdesktop::td_mtproto
-+    tdesktop::td_scheme
-+    desktop-app::lib_base
-+    desktop-app::lib_crl
-+    desktop-app::lib_tl
-+    desktop-app::external_openssl
-+    desktop-app::external_qt
-+    desktop-app::external_zlib
-+)
-+
-+set_target_properties(test_mtproto_client_hello PROPERTIES
-+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-+)
 diff --git a/Telegram/cmake/td_mtproto.cmake b/Telegram/cmake/td_mtproto.cmake
 index 79a0a3c76f..668c70f7a3 100644
 --- a/Telegram/cmake/td_mtproto.cmake

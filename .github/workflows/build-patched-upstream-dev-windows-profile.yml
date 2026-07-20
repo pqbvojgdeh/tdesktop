@@ -715,17 +715,6 @@ jobs:
           if errorlevel 1 exit /b 1
 
           if /I "%BUILD_VARIANT%"=="patched" (
-            cmake --build ..\out ^
-              --config Release ^
-              --target test_mtproto_client_hello ^
-              --parallel %BUILD_PARALLEL%
-            if errorlevel 1 exit /b 1
-
-            ..\out\Release\test_mtproto_client_hello.exe
-            if errorlevel 1 exit /b 1
-          )
-
-          if /I "%BUILD_VARIANT%"=="patched" (
             for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC', [Globalization.CultureInfo]::InvariantCulture)"`) do set "SOURCE_BUILD_TIME_UTC=%%i"
             powershell -NoProfile -Command "$p = Join-Path $env:TBUILD '%REPO_NAME%\Telegram\SourceFiles\window\window_main_menu_helpers.cpp'; $text = [IO.File]::ReadAllText($p); if (-not $text.Contains('__TDESKTOP_BUILD_TIME_UTC__')) { throw 'Build time placeholder was not found.' }; $text = $text.Replace('__TDESKTOP_BUILD_TIME_UTC__', $env:SOURCE_BUILD_TIME_UTC); $encoding = New-Object System.Text.UTF8Encoding $false; [IO.File]::WriteAllText($p, $text, $encoding)"
             if errorlevel 1 exit /b 1
@@ -765,6 +754,12 @@ jobs:
             --config Release ^
             --target Telegram ^
             --parallel %BUILD_PARALLEL%
+          if errorlevel 1 exit /b 1
+
+          if /I "%BUILD_VARIANT%"=="patched" (
+            ..\out\Release\Telegram.exe --validate-mtproto-client-hello
+            if errorlevel 1 exit /b 1
+          )
 
       - name: Collect executable and build metadata
         shell: pwsh
