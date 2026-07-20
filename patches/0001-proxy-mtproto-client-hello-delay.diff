@@ -5100,10 +5100,10 @@ index 0000000000..d641847a92
 +}
 diff --git a/Telegram/cmake/mtproto_profile_tests.cmake b/Telegram/cmake/mtproto_profile_tests.cmake
 new file mode 100644
-index 0000000000..72114a2264
+index 0000000000..7d51ca7b9f
 --- /dev/null
 +++ b/Telegram/cmake/mtproto_profile_tests.cmake
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,35 @@
 +# This file is part of Telegram Desktop,
 +# the official desktop application for the Telegram messaging service.
 +#
@@ -5127,10 +5127,13 @@ index 0000000000..72114a2264
 +target_link_libraries(test_mtproto_client_hello
 +PRIVATE
 +    tdesktop::td_mtproto
++    tdesktop::td_scheme
 +    desktop-app::lib_base
 +    desktop-app::lib_crl
++    desktop-app::lib_tl
 +    desktop-app::external_openssl
 +    desktop-app::external_qt
++    desktop-app::external_zlib
 +)
 +
 +set_target_properties(test_mtproto_client_hello PROPERTIES
