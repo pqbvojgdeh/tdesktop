@@ -1,5 +1,5 @@
 diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
-index 34b5e9cc3f..797648a634 100644
+index 688c18c29e..ccd05e83fe 100644
 --- a/Telegram/SourceFiles/window/window.style
 +++ b/Telegram/SourceFiles/window/window.style
 @@ -112,7 +112,7 @@ mainMenuCoverNameTop: 84px;
@@ -105,7 +105,7 @@ index 5975e0e60d..57f09d55f3 100644
  	rpl::event_stream<bool> _nightThemeSwitches;
  	base::Timer _nightThemeSwitch;
 diff --git a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
-index 7ee2c7b0d7..4c9bf53096 100644
+index 69ef7df16f..1f604869d4 100644
 --- a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
 @@ -46,9 +46,7 @@ namespace Window {
