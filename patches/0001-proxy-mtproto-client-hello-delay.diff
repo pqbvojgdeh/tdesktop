@@ -2451,19 +2451,21 @@ index c1fee27696..9aee7bce96 100644
  
  };
 diff --git a/Telegram/SourceFiles/main.cpp b/Telegram/SourceFiles/main.cpp
-index d3d938c47f..d50118cd38 100644
+index d3d938c47f..5b3109dfa4 100644
 --- a/Telegram/SourceFiles/main.cpp
 +++ b/Telegram/SourceFiles/main.cpp
-@@ -7,7 +7,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,7 +7,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "core/launcher.h"
  
 +#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
-+#include "mtproto/details/mtproto_tls_socket.h"
-+
 +#include <QtCore/QCoreApplication>
 +
 +#include <cstring>
++
++namespace MTP::details {
++[[nodiscard]] bool ValidateClientHelloProfilesForTests();
++} // namespace MTP::details
 +#endif
 +
  int main(int argc, char *argv[]) {
