@@ -5100,10 +5100,10 @@ index 0000000000..d641847a92
 +}
 diff --git a/Telegram/cmake/mtproto_profile_tests.cmake b/Telegram/cmake/mtproto_profile_tests.cmake
 new file mode 100644
-index 0000000000..16f67b3f45
+index 0000000000..72114a2264
 --- /dev/null
 +++ b/Telegram/cmake/mtproto_profile_tests.cmake
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,32 @@
 +# This file is part of Telegram Desktop,
 +# the official desktop application for the Telegram messaging service.
 +#
@@ -5114,6 +5114,10 @@ index 0000000000..16f67b3f45
 +init_target(test_mtproto_client_hello "(tests)")
 +
 +target_include_directories(test_mtproto_client_hello PRIVATE ${src_loc})
++
++target_precompile_headers(test_mtproto_client_hello PRIVATE
++    ${src_loc}/mtproto/mtproto_pch.h
++)
 +
 +nice_target_sources(test_mtproto_client_hello ${src_loc}
 +PRIVATE
