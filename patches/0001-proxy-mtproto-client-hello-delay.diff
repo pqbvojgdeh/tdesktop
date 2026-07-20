@@ -42,7 +42,7 @@ index 3e51338c13..a3f1c5fbc1 100644
  proxyRowTitleFg: windowFg;
  proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31da3..98266b4318 100644
+index 6d99e31da3..bb3e4077e1 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -59,30 +59,97 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -443,8 +443,7 @@ index 6d99e31da3..98266b4318 100644
  		const auto raw = menu->get();
  		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
 +		const auto ipv6Disabled = !_settings.tryIPv6();
- 		addAction({
--			.text = tr::lng_proxy_add_from_clipboard(tr::now),
++		addAction({
 +			.text = u"Disable IPv6 for proxies"_q,
 +			.handler = [=] {
 +				_controller->setTryIPv6(ipv6Disabled);
@@ -453,7 +452,8 @@ index 6d99e31da3..98266b4318 100644
 +			},
 +			.icon = ipv6Disabled ? &st::menuIconSelect : nullptr,
 +		});
-+		addAction({
+ 		addAction({
+-			.text = tr::lng_proxy_add_from_clipboard(tr::now),
 +			.text = u"Add from clipboard"_q,
  			.handler = [=] { AddProxyFromClipboard(_controller, uiShow()); },
  			.icon = &st::menuIconImportTheme,
@@ -488,7 +488,7 @@ index 6d99e31da3..98266b4318 100644
  	_proxySettings
  		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
  			_settings.settings());
-@@ -1121,90 +1278,254 @@ void ProxiesBox::setupContent() {
+@@ -1121,90 +1278,255 @@ void ProxiesBox::setupContent() {
  			inner,
  			_proxySettings,
  			ProxyData::Settings::Disabled,
@@ -602,6 +602,7 @@ index 6d99e31da3..98266b4318 100644
 +	_proxyCHelloStatusTimer->setInterval(1000);
 +	connect(_proxyCHelloStatusTimer, &QTimer::timeout, [=] {
 +		refreshProxyCHelloStatus();
++		_controller->refreshSelectedView();
 +	});
 +	_proxyCHelloStatusTimer->start();
 +	addSectionTitle(u"Connection behavior"_q);
@@ -798,7 +799,7 @@ index 6d99e31da3..98266b4318 100644
  
  	_wrap = inner->add(std::move(_initialWrap));
  	inner->add(object_ptr<Ui::FixedHeightWidget>(
-@@ -1218,41 +1539,129 @@ void ProxiesBox::setupContent() {
+@@ -1218,41 +1540,129 @@ void ProxiesBox::setupContent() {
  		}
  		refreshProxyForCalls();
  		refreshProxyRotation();
@@ -806,7 +807,9 @@ index 6d99e31da3..98266b4318 100644
  	});
 -	_tryIPv6->checkedChanges(
 +	_proxySlowMode->toggledChanges(
-+	) | rpl::on_next([=](bool checked) {
+ 	) | rpl::on_next([=](bool checked) {
+-		_controller->setTryIPv6(checked);
+-	}, _tryIPv6->lifetime());
 +		if (!_settings.isEnabled()) {
 +			_proxySlowModeValue = _settings.proxySlowMode();
 +			return;
@@ -817,9 +820,7 @@ index 6d99e31da3..98266b4318 100644
 +		refreshProxySlowMode();
 +	}, _proxySlowMode->lifetime());
 +	_proxyAddressPriorityButton->toggledChanges(
- 	) | rpl::on_next([=](bool checked) {
--		_controller->setTryIPv6(checked);
--	}, _tryIPv6->lifetime());
++	) | rpl::on_next([=](bool checked) {
 +		if (!_settings.isEnabled()
 +			|| !_controller->setProxyPreferIPv6(checked)) {
 +			_proxyAddressPriorityValue = _settings.proxyPreferIPv6();
@@ -939,7 +940,7 @@ index 6d99e31da3..98266b4318 100644
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1262,7 +1671,7 @@ void ProxiesBox::setupContent() {
+@@ -1262,7 +1672,7 @@ void ProxiesBox::setupContent() {
  				object_ptr<Ui::VerticalLayout>(inner)));
  		const auto shareList = Settings::AddButtonWithIcon(
  			wrap->entity(),
@@ -948,7 +949,7 @@ index 6d99e31da3..98266b4318 100644
  			st::settingsButton,
  			{ &st::menuIconCopy });
  		_shareListButton = shareList;
-@@ -1273,7 +1682,7 @@ void ProxiesBox::setupContent() {
+@@ -1273,7 +1683,7 @@ void ProxiesBox::setupContent() {
  		wrap->finishAnimating();
  	}
  
@@ -957,7 +958,7 @@ index 6d99e31da3..98266b4318 100644
  
  	inner->heightValue(
  	) | rpl::map([=](int height) {
-@@ -1284,7 +1693,7 @@ void ProxiesBox::setupContent() {
+@@ -1284,7 +1694,7 @@ void ProxiesBox::setupContent() {
  			st::boxMaxListHeight);
  	}) | rpl::distinct_until_changed(
  	) | rpl::on_next([=](int height) {
@@ -966,7 +967,7 @@ index 6d99e31da3..98266b4318 100644
  	}, inner->lifetime());
  }
  
-@@ -1293,8 +1702,7 @@ void ProxiesBox::refreshProxyForCalls() {
+@@ -1293,8 +1703,7 @@ void ProxiesBox::refreshProxyForCalls() {
  		return;
  	}
  	_proxyForCalls->toggle(
@@ -976,7 +977,7 @@ index 6d99e31da3..98266b4318 100644
  		anim::type::normal);
  }
  
-@@ -1302,14 +1710,120 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1302,14 +1711,120 @@ void ProxiesBox::refreshProxyRotation() {
  	if (!_proxyRotation || !_proxyRotationOptions) {
  		return;
  	}
@@ -1101,7 +1102,7 @@ index 6d99e31da3..98266b4318 100644
  }
  
  int ProxiesBox::rowHeight() const {
-@@ -1317,6 +1831,8 @@ int ProxiesBox::rowHeight() const {
+@@ -1317,6 +1832,8 @@ int ProxiesBox::rowHeight() const {
  		+ st::semiboldFont->height
  		+ st::proxyRowSkip
  		+ st::normalFont->height
@@ -1110,7 +1111,7 @@ index 6d99e31da3..98266b4318 100644
  		+ st::proxyRowPadding.bottom();
  }
  
-@@ -1339,8 +1855,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1339,8 +1856,7 @@ void ProxiesBox::applyView(View &&view) {
  			? _wrap.data()
  			: _initialWrap.data();
  		const auto &[i, ok] = _rows.emplace(id, nullptr);
@@ -1120,7 +1121,7 @@ index 6d99e31da3..98266b4318 100644
  			object_ptr<ProxyRow>(
  				wrap,
  				std::move(view))));
-@@ -1355,6 +1870,18 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1355,6 +1871,18 @@ void ProxiesBox::applyView(View &&view) {
  		i->second->updateFields(std::move(view));
  	}
  	refreshProxyRotation();
@@ -1139,7 +1140,7 @@ index 6d99e31da3..98266b4318 100644
  }
  
  void ProxiesBox::createNoRowsLabel() {
-@@ -1364,13 +1891,13 @@ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1892,13 @@ void ProxiesBox::createNoRowsLabel() {
  			rowHeight()),
  		st::proxyEmptyListPadding));
  	_noRows->resize(
@@ -1155,7 +1156,7 @@ index 6d99e31da3..98266b4318 100644
  		st::proxyEmptyListLabel);
  	_noRows->widthValue(
  	) | rpl::on_next([=](int width) {
-@@ -1404,7 +1931,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+@@ -1404,7 +1932,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
  
  	button->clicks(
  	) | rpl::on_next([=] {
@@ -1166,7 +1167,7 @@ index 6d99e31da3..98266b4318 100644
  	}, button->lifetime());
  }
  
-@@ -1704,6 +2233,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1704,19 +2234,14 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  	) | ranges::views::transform([&](const ProxyData &proxy) {
  		return Item{ ++_idCounter, proxy };
  	}) | ranges::to_vector;
@@ -1174,8 +1175,12 @@ index 6d99e31da3..98266b4318 100644
  
  	_settings.connectionTypeChanges(
  	) | rpl::on_next([=] {
-@@ -1714,9 +2244,6 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
- 		}
+ 		_proxySettingsChanges.fire_copy(_settings.settings());
+-		const auto i = findByProxy(_settings.selected());
+-		if (i != end(_list)) {
+-			updateView(*i);
+-		}
++		refreshSelectedView();
  	}, _lifetime);
  
 -	for (auto &item : _list) {
@@ -1184,7 +1189,7 @@ index 6d99e31da3..98266b4318 100644
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
-@@ -2003,51 +2530,183 @@ auto ProxiesBoxController::proxySettingsValue() const
+@@ -2003,49 +2528,181 @@ auto ProxiesBoxController::proxySettingsValue() const
  	) | rpl::distinct_until_changed();
  }
  
@@ -1267,14 +1272,14 @@ index 6d99e31da3..98266b4318 100644
 +	updateView(item);
 +	if (finishCancelledBatch) {
 +		finishChecksBatch();
- 	}
- }
- 
++	}
++}
++
 +bool ProxiesBoxController::cancelBatchCheck(Item &item) {
 +	item.checker = nullptr;
 +	if (!item.batchCheck) {
 +		return false;
-+	}
+ 	}
 +	item.batchCheck = false;
 +	return _batchChecksLeft > 0 && --_batchChecksLeft == 0;
 +}
@@ -1398,12 +1403,10 @@ index 6d99e31da3..98266b4318 100644
 +		}
 +		return compareEndpoints(a, b) < 0;
 +	});
-+}
-+
+ }
+ 
  object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
- 		not_null<Main::Account*> account,
- 		const QString &highlightId) {
-@@ -2146,6 +2805,7 @@ void ProxiesBoxController::applyItem(int id) {
+@@ -2146,6 +2803,7 @@ void ProxiesBoxController::applyItem(int id) {
  
  void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	auto item = findById(id);
@@ -1411,7 +1414,7 @@ index 6d99e31da3..98266b4318 100644
  	item->deleted = deleted;
  
  	if (deleted) {
-@@ -2195,6 +2855,9 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+@@ -2195,6 +2853,9 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	}
  	saveDelayed();
  	updateView(*item);
@@ -1421,7 +1424,7 @@ index 6d99e31da3..98266b4318 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
-@@ -2217,17 +2880,23 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2217,17 +2878,23 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
  void ProxiesBoxController::replaceItemWith(
  		std::vector<Item>::iterator which,
  		std::vector<Item>::iterator with) {
@@ -1448,7 +1451,7 @@ index 6d99e31da3..98266b4318 100644
  }
  
  void ProxiesBoxController::replaceItemValue(
-@@ -2297,11 +2966,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+@@ -2297,11 +2964,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  		}
  	}
  	Core::App().setCurrentProxy(_settings.selected(), value);
@@ -1529,7 +1532,7 @@ index 6d99e31da3..98266b4318 100644
  	if (_settings.useProxyForCalls() == enabled) {
  		return;
  	}
-@@ -2313,6 +3051,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
+@@ -2313,6 +3049,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
@@ -1539,7 +1542,7 @@ index 6d99e31da3..98266b4318 100644
  	if (_settings.proxyRotationEnabled() == enabled) {
  		return;
  	}
-@@ -2321,6 +3062,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
+@@ -2321,6 +3060,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
  }
  
  void ProxiesBoxController::setProxyRotationTimeout(int value) {
@@ -1549,7 +1552,7 @@ index 6d99e31da3..98266b4318 100644
  	if (_settings.proxyRotationTimeout() == value) {
  		return;
  	}
-@@ -2329,11 +3073,35 @@ void ProxiesBoxController::setProxyRotationTimeout(int value) {
+@@ -2329,15 +3071,46 @@ void ProxiesBoxController::setProxyRotationTimeout(int value) {
  }
  
  void ProxiesBoxController::setTryIPv6(bool enabled) {
@@ -1588,7 +1591,18 @@ index 6d99e31da3..98266b4318 100644
  	_settings.connectionTypeChangesNotify();
  	saveDelayed();
  }
-@@ -2359,18 +3127,60 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+ 
++void ProxiesBoxController::refreshSelectedView() {
++	const auto i = findByProxy(_settings.selected());
++	if (i != end(_list)) {
++		updateView(*i);
++	}
++}
++
+ void ProxiesBoxController::saveDelayed() {
+ 	Core::App().proxyRotationSettingsChanged();
+ 	_saveTimer.callOnce(kSaveSettingsDelayedTimeout);
+@@ -2359,18 +3132,60 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
  }
  
  void ProxiesBoxController::updateView(const Item &item) {
@@ -1652,7 +1666,7 @@ index 6d99e31da3..98266b4318 100644
  			return item.state;
  		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
  			return ItemState::Online;
-@@ -2379,18 +3189,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+@@ -2379,18 +3194,19 @@ void ProxiesBoxController::updateView(const Item &item) {
  	}();
  	const auto supportsShare = ProxyDataIsShareable(item.data);
  	const auto supportsCalls = item.data.supportsCalls();
@@ -1676,7 +1690,7 @@ index 6d99e31da3..98266b4318 100644
  
  void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
-index 5de98bc663..85f0dfca6a 100644
+index 5de98bc663..6fb7d92a98 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.h
 +++ b/Telegram/SourceFiles/boxes/connection_box.h
 @@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -1720,7 +1734,7 @@ index 5de98bc663..85f0dfca6a 100644
  
  	};
  
-@@ -84,11 +87,22 @@ public:
+@@ -84,11 +87,23 @@ public:
  	object_ptr<Ui::BoxContent> editItemBox(int id);
  	object_ptr<Ui::BoxContent> addNewItemBox();
  	bool setProxySettings(ProxyData::Settings value);
@@ -1734,6 +1748,7 @@ index 5de98bc663..85f0dfca6a 100644
  	void setProxyRotationTimeout(int value);
  	void setTryIPv6(bool enabled);
 +	void refreshAllChecks();
++	void refreshSelectedView();
  	rpl::producer<ProxyData::Settings> proxySettingsValue() const;
 +	rpl::producer<bool> checksRunningValue() const;
 +	rpl::producer<> checksFinished() const;
@@ -1743,7 +1758,7 @@ index 5de98bc663..85f0dfca6a 100644
  
  	[[nodiscard]] bool contains(const ProxyData &proxy) const;
  	void addNewItem(const ProxyData &proxy);
-@@ -100,15 +114,15 @@ public:
+@@ -100,15 +115,15 @@ public:
  	~ProxiesBoxController();
  
  private:
@@ -1763,7 +1778,7 @@ index 5de98bc663..85f0dfca6a 100644
  
  	};
  
-@@ -118,7 +132,14 @@ private:
+@@ -118,7 +133,14 @@ private:
  	void updateView(const Item &item);
  	void share(const ProxyData &proxy, bool qr = false);
  	void saveDelayed();
@@ -1779,7 +1794,7 @@ index 5de98bc663..85f0dfca6a 100644
  
  	void replaceItemWith(
  		std::vector<Item>::iterator which,
-@@ -134,6 +155,9 @@ private:
+@@ -134,6 +156,9 @@ private:
  	rpl::event_stream<ItemView> _views;
  	base::Timer _saveTimer;
  	rpl::event_stream<ProxyData::Settings> _proxySettingsChanges;
