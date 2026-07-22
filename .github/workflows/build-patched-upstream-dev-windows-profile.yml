@@ -192,17 +192,16 @@ jobs:
           source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
           workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
           patch_dir="$workspace/patch-source/patches"
-patches=(
-  "$patch_dir/0001-proxy-settings-and-data-model.diff"
-  "$patch_dir/0002-mtproto-client-hello-session-and-slow-connect.diff"
-  "$patch_dir/0003-mtproto-profile-test-entrypoint.diff"
-  "$patch_dir/0004-proxy-check-coordinator-and-rotation.diff"
-  "$patch_dir/0005-proxy-address-priority-and-resolution.diff"
-  "$patch_dir/0006-proxy-settings-ui.diff"
-  "$patch_dir/0007-proxy-resolved-ip-health-and-timeouts.diff"
-  "$patch_dir/0008-main-menu-version-commit-build-tooltip.diff"
-)
-
+          patches=(
+            "$patch_dir/0001-proxy-settings-and-data-model.diff"
+            "$patch_dir/0002-mtproto-client-hello-session-and-slow-connect.diff"
+            "$patch_dir/0003-mtproto-profile-test-entrypoint.diff"
+            "$patch_dir/0004-proxy-check-coordinator-and-rotation.diff"
+            "$patch_dir/0005-proxy-address-priority-and-resolution.diff"
+            "$patch_dir/0006-proxy-settings-ui.diff"
+            "$patch_dir/0007-proxy-resolved-ip-health-and-timeouts.diff"
+            "$patch_dir/0008-main-menu-version-commit-build-tooltip.diff"
+          )
           for patch in "${patches[@]}"; do
             if [[ ! -f "$patch" ]]; then
               echo "::error::Patched variant file was not found: $patch"
