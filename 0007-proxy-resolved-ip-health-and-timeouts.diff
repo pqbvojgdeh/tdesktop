@@ -350,6 +350,34 @@ index 82d58be..07f2a78 100644
  	QString _address;
  	int _port = 0;
  	bytes::vector _protocolSecret;
+diff --git a/Telegram/SourceFiles/mtproto/connection_tcp.cpp b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
+--- a/Telegram/SourceFiles/mtproto/connection_tcp.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
+@@ -20,7 +20,8 @@ namespace details {
+ namespace {
+ 
+ constexpr auto kPacketSizeMax = int(0x01000000 * sizeof(mtpPrime));
+ constexpr auto kFullConnectionTimeout = 8 * crl::time(1000);
++constexpr auto kSlowConnectTimeoutBudget = crl::time(8000);
+ constexpr auto kSmallBufferSize = 256 * 1024;
+ constexpr auto kMinPacketBuffer = 256;
+ constexpr auto kConnectionStartPrefixSize = 64;
+@@ -581,6 +582,15 @@ crl::time TcpConnection::pingTime() const {
+ }
+ 
+ crl::time TcpConnection::fullConnectTimeout() const {
++	if (ProxyData::globalSlowMode()
++		&& _proxy.type == ProxyData::Type::Mtproto) {
++		const auto secret = _proxy.secretFromMtprotoPassword();
++		if (secret.size() >= 21
++			&& secret.front() == bytes::type(0xEE)) {
++			return kFullConnectionTimeout
++				+ kSlowConnectTimeoutBudget;
++		}
++	}
+ 	return kFullConnectionTimeout;
+ }
+ 
 diff --git a/Telegram/SourceFiles/mtproto/session_private.cpp b/Telegram/SourceFiles/mtproto/session_private.cpp
 --- a/Telegram/SourceFiles/mtproto/session_private.cpp
 +++ b/Telegram/SourceFiles/mtproto/session_private.cpp

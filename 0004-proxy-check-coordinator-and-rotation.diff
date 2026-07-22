@@ -136,7 +136,7 @@ index a643f0aee6..41d41d6dc6 100644
 +
 +crl::time ProxyRotationManager::recheckInterval() const {
 +	auto result = kProxyRotationBaseRecheckInterval;
-+	for (auto i = 0; i != _failedRounds; ++i) {
++	for (auto i = 1; i < _failedRounds; ++i) {
 +		result = std::min(result * 2, kProxyRotationMaximumRecheckInterval);
 +	}
 +	return result;
@@ -159,7 +159,7 @@ index a643f0aee6..41d41d6dc6 100644
 +			return;
 +		}
 +	}
-+	_failedRounds = std::min(_failedRounds + 1, 4);
++	_failedRounds = std::min(_failedRounds + 1, 5);
 +	_roundStartedAt = crl::now();
  }
  

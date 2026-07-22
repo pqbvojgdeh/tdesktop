@@ -1848,7 +1848,7 @@ index 448190a556..36b6117c78 100644
  	_connected.fire({});
  }
  
-@@ -854,6 +2083,35 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -854,6 +2083,31 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -1860,13 +1860,9 @@ index 448190a556..36b6117c78 100644
 +		const auto endpoint = SlowConnectEndpoint(address, port);
 +		const auto schedule = ReserveSlowConnect(endpoint, delay, jitter);
 +		if (schedule.overflow) {
-+			QTimer::singleShot(0, this, [=] {
-+				if (_state == State::Connecting) {
-+					logError(888, "Slow-mode connection queue is full.");
-+					_state = State::Error;
-+					_error.fire({});
-+				}
-+			});
++			// Local queue pressure is not a network failure. Connect now instead
++			// of reporting an error that could quarantine a healthy proxy IP.
++			_socket.connectToHost(address, port);
 +			return;
 +		}
 +		if (schedule.waitFor.count() > 0) {
