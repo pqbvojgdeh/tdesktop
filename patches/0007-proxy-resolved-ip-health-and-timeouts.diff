@@ -1,0 +1,380 @@
+diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+index a6e2425..8c586bb 100644
+--- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+@@ -10,12 +10,165 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "mtproto/mtp_instance.h"
+ 
+ #include <algorithm>
++#include <iterator>
++#include <map>
++#include <mutex>
++#include <tuple>
+ 
+ namespace MTP {
+ namespace details {
+ namespace {
+ 
+-constexpr auto kOneConnectionTimeout = 4000;
++constexpr auto kOneConnectionTimeout = crl::time(4000);
++constexpr auto kSlowConnectMaximumWait = crl::time(7500);
++constexpr auto kSlowConnectSchedulingMargin = crl::time(500);
++constexpr auto kSlowOneConnectionTimeout = kOneConnectionTimeout
++	+ kSlowConnectMaximumWait
++	+ kSlowConnectSchedulingMargin;
++constexpr auto kEarlyDisconnectQuarantine = 30 * crl::time(1000);
++constexpr auto kIpQuarantineBase = 30 * crl::time(1000);
++constexpr auto kIpQuarantineMaximum = 10 * crl::time(1000) * 60;
++constexpr auto kIpHealthForgetAfter = 30 * crl::time(1000) * 60;
++constexpr auto kMaximumIpHealthEntries = 256;
++
++struct IpHealthKey {
++	QString host;
++	uint32 port = 0;
++	QString ip;
++
++	friend bool operator<(const IpHealthKey &a, const IpHealthKey &b) {
++		return std::tie(a.host, a.port, a.ip)
++			< std::tie(b.host, b.port, b.ip);
++	}
++};
++
++struct IpHealthEntry {
++	crl::time quarantineUntil = 0;
++	crl::time lastFailureAt = 0;
++	int failures = 0;
++};
++
++[[nodiscard]] bool UsesFakeTls(const ProxyData &proxy) {
++	if (proxy.type != ProxyData::Type::Mtproto) {
++		return false;
++	}
++	const auto secret = proxy.secretFromMtprotoPassword();
++	return secret.size() > 17 && secret.front() == bytes::type(0xEE);
++}
++
++[[nodiscard]] crl::time OneConnectionTimeout(const ProxyData &proxy) {
++	return ProxyData::globalSlowMode() && UsesFakeTls(proxy)
++		? kSlowOneConnectionTimeout
++		: kOneConnectionTimeout;
++}
++
++[[nodiscard]] std::mutex &IpHealthMutex() {
++	static const auto result = new std::mutex();
++	return *result;
++}
++
++[[nodiscard]] auto &IpHealthMap() {
++	static const auto result = new std::map<IpHealthKey, IpHealthEntry>();
++	return *result;
++}
++
++[[nodiscard]] IpHealthKey MakeIpHealthKey(
++		const QString &host,
++		uint32 port,
++		const QString &ip) {
++	return { host.toLower(), port, ip.toLower() };
++}
++
++void PruneIpHealth(crl::time now) {
++	auto &map = IpHealthMap();
++	for (auto i = map.begin(); i != map.end();) {
++		i = (!i->second.lastFailureAt
++			|| i->second.lastFailureAt + kIpHealthForgetAfter <= now)
++			? map.erase(i)
++			: std::next(i);
++	}
++}
++
++void TrimIpHealth() {
++	auto &map = IpHealthMap();
++	if (map.size() < kMaximumIpHealthEntries) {
++		return;
++	}
++	const auto oldest = std::min_element(
++		begin(map),
++		end(map),
++		[](const auto &a, const auto &b) {
++			return a.second.lastFailureAt < b.second.lastFailureAt;
++		});
++	if (oldest != end(map)) {
++		map.erase(oldest);
++	}
++}
++
++void MarkIpFailed(
++		const QString &host,
++		uint32 port,
++		const QString &ip) {
++	if (host.isEmpty() || !port || ip.isEmpty()) {
++		return;
++	}
++	const auto now = crl::now();
++	const auto lock = std::lock_guard(IpHealthMutex());
++	PruneIpHealth(now);
++	const auto key = MakeIpHealthKey(host, port, ip);
++	if (!IpHealthMap().contains(key)) {
++		TrimIpHealth();
++	}
++	auto &entry = IpHealthMap()[key];
++	if (!entry.lastFailureAt
++		|| entry.lastFailureAt + kIpHealthForgetAfter <= now) {
++		entry.failures = 0;
++	}
++	entry.failures = std::min(entry.failures + 1, 6);
++	const auto multiplier = 1 << std::min(entry.failures - 1, 5);
++	const auto duration = std::min(
++		kIpQuarantineBase * multiplier,
++		kIpQuarantineMaximum);
++	entry.lastFailureAt = now;
++	entry.quarantineUntil = now + duration;
++}
++
++void ClearIpHealth(
++		const QString &host,
++		uint32 port,
++		const QString &ip) {
++	if (host.isEmpty() || !port || ip.isEmpty()) {
++		return;
++	}
++	const auto lock = std::lock_guard(IpHealthMutex());
++	IpHealthMap().erase(MakeIpHealthKey(host, port, ip));
++}
++
++[[nodiscard]] int FindNextResolvedIpIndex(
++		const ProxyData &proxy,
++		int afterIndex) {
++	const auto now = crl::now();
++	const auto lock = std::lock_guard(IpHealthMutex());
++	PruneIpHealth(now);
++	auto fallback = -1;
++	auto fallbackUntil = crl::time(0);
++	for (auto index = afterIndex + 1;
++		index < int(proxy.resolvedIPs.size());
++		++index) {
++		const auto i = IpHealthMap().find(MakeIpHealthKey(
++			proxy.host,
++			proxy.port,
++			proxy.resolvedIPs[index]));
++		if (i == end(IpHealthMap()) || i->second.quarantineUntil <= now) {
++			return index;
++		}
++		if (fallback < 0 || i->second.quarantineUntil < fallbackUntil) {
++			fallback = index;
++			fallbackUntil = i->second.quarantineUntil;
++		}
++	}
++	return fallback;
++}
+ 
+ } // namespace
+ 
+@@ -127,27 +280,56 @@ void ResolvingConnection::domainResolved(
+ 	}
+ }
+ 
++void ResolvingConnection::quarantineCurrentIp() {
++	if (_ipIndex < 0 || _ipIndex >= int(_proxy.resolvedIPs.size())) {
++		return;
++	}
++	MarkIpFailed(_proxy.host, _proxy.port, _proxy.resolvedIPs[_ipIndex]);
++}
++
++void ResolvingConnection::clearCurrentIpHealth() {
++	if (_ipIndex < 0 || _ipIndex >= int(_proxy.resolvedIPs.size())) {
++		return;
++	}
++	ClearIpHealth(_proxy.host, _proxy.port, _proxy.resolvedIPs[_ipIndex]);
++}
++
+ bool ResolvingConnection::refreshChild() {
+ 	if (!_child) {
+ 		return true;
+-	} else if (++_ipIndex >= _proxy.resolvedIPs.size()) {
++	}
++	const auto next = FindNextResolvedIpIndex(_proxy, _ipIndex);
++	if (next < 0) {
+ 		return false;
+ 	}
++	_ipIndex = next;
+ 	setChild(_child->clone(ToDirectIpProxy(_proxy, _ipIndex)));
+-	_timeoutTimer.callOnce(kOneConnectionTimeout);
++	_timeoutTimer.callOnce(OneConnectionTimeout(_proxy));
+ 	return true;
+ }
+ 
+ void ResolvingConnection::emitError(int errorCode) {
++	_timeoutTimer.cancel();
+ 	_ipIndex = -1;
++	_connected = false;
++	_connectedAt = 0;
++	_disconnecting = false;
+ 	_child = nullptr;
+ 	error(errorCode);
+ }
+ 
+ void ResolvingConnection::handleError(int errorCode) {
++	if (_disconnecting) {
++		return;
++	}
+ 	if (_connected) {
++		if (_connectedAt
++			&& (crl::now() - _connectedAt) < kEarlyDisconnectQuarantine) {
++			quarantineCurrentIp();
++		}
+ 		emitError(errorCode);
+ 	} else if (!_proxy.resolvedIPs.empty()) {
++		quarantineCurrentIp();
+ 		if (!refreshChild()) {
+ 			emitError(errorCode);
+ 		}
+@@ -157,7 +339,18 @@ void ResolvingConnection::handleError(int errorCode) {
+ }
+ 
+ void ResolvingConnection::handleDisconnected() {
++	if (_disconnecting) {
++		_timeoutTimer.cancel();
++		if (_connected) {
++			disconnected();
++		}
++		return;
++	}
+ 	if (_connected) {
++		if (_connectedAt
++			&& (crl::now() - _connectedAt) < kEarlyDisconnectQuarantine) {
++			quarantineCurrentIp();
++		}
+ 		disconnected();
+ 	} else {
+ 		handleError(kErrorCodeOther);
+@@ -175,20 +368,21 @@ void ResolvingConnection::handleReceivedData() {
+ }
+ 
+ void ResolvingConnection::handleConnected() {
+-	if (_ipIndex >= int(_proxy.resolvedIPs.size())) {
++	if (_ipIndex < 0 || _ipIndex >= int(_proxy.resolvedIPs.size())) {
+ 		emitError(kErrorCodeOther);
+ 		return;
+ 	}
+ 	_connected = true;
++	_connectedAt = crl::now();
++	_disconnecting = false;
+ 	_timeoutTimer.cancel();
+-	if (_ipIndex >= 0) {
+-		const auto host = _proxy.host;
+-		const auto good = _proxy.resolvedIPs[_ipIndex];
+-		const auto instance = _instance;
+-		InvokeQueued(_instance, [=] {
+-			instance->setGoodProxyDomain(host, good);
+-		});
+-	}
++	clearCurrentIpHealth();
++	const auto host = _proxy.host;
++	const auto good = _proxy.resolvedIPs[_ipIndex];
++	const auto instance = _instance;
++	InvokeQueued(_instance, [=] {
++		instance->setGoodProxyDomain(host, good);
++	});
+ 	connected();
+ }
+ 
+@@ -199,7 +393,8 @@ crl::time ResolvingConnection::pingTime() const {
+ }
+ 
+ crl::time ResolvingConnection::fullConnectTimeout() const {
+-	return kOneConnectionTimeout * qMax(int(_proxy.resolvedIPs.size()), 1);
++	return OneConnectionTimeout(_proxy)
++		* qMax(int(_proxy.resolvedIPs.size()), 1);
+ }
+ 
+ void ResolvingConnection::sendData(mtpBuffer &&buffer) {
+@@ -209,6 +404,8 @@ void ResolvingConnection::sendData(mtpBuffer &&buffer) {
+ }
+ 
+ void ResolvingConnection::disconnectFromServer() {
++	_disconnecting = true;
++	_timeoutTimer.cancel();
+ 	_address = QString();
+ 	_port = 0;
+ 	_protocolSecret = bytes::vector();
+@@ -219,12 +416,21 @@ void ResolvingConnection::disconnectFromServer() {
+ 	_child->disconnectFromServer();
+ }
+ 
++void ResolvingConnection::timedOut() {
++	if (!_disconnecting && _child) {
++		_child->timedOut();
++	}
++}
++
+ void ResolvingConnection::connectToServer(
+ 		const QString &address,
+ 		int port,
+ 		const bytes::vector &protocolSecret,
+ 		int16 protocolDcId,
+ 		bool protocolForFiles) {
++	_disconnecting = false;
++	_connected = false;
++	_connectedAt = 0;
+ 	if (!_child) {
+ 		InvokeQueued(this, [=] { emitError(kErrorCodeOther); });
+ 		return;
+diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.h b/Telegram/SourceFiles/mtproto/connection_resolving.h
+index 82d58be..07f2a78 100644
+--- a/Telegram/SourceFiles/mtproto/connection_resolving.h
++++ b/Telegram/SourceFiles/mtproto/connection_resolving.h
+@@ -28,6 +28,7 @@ public:
+ 	crl::time fullConnectTimeout() const override;
+ 	void sendData(mtpBuffer &&buffer) override;
+ 	void disconnectFromServer() override;
++	void timedOut() override;
+ 	void connectToServer(
+ 		const QString &address,
+ 		int port,
+@@ -45,6 +46,8 @@ private:
+ 	void setChild(ConnectionPointer &&child);
+ 	bool refreshChild();
+ 	void emitError(int errorCode);
++	void quarantineCurrentIp();
++	void clearCurrentIpHealth();
+ 
+ 	void domainResolved(
+ 		const QString &host,
+@@ -58,7 +61,9 @@ private:
+ 	not_null<Instance*> _instance;
+ 	ConnectionPointer _child;
+ 	bool _connected = false;
++	bool _disconnecting = false;
+ 	int _ipIndex = -1;
++	crl::time _connectedAt = 0;
+ 	QString _address;
+ 	int _port = 0;
+ 	bytes::vector _protocolSecret;
+diff --git a/Telegram/SourceFiles/mtproto/session_private.cpp b/Telegram/SourceFiles/mtproto/session_private.cpp
+--- a/Telegram/SourceFiles/mtproto/session_private.cpp
++++ b/Telegram/SourceFiles/mtproto/session_private.cpp
+@@ -1108,5 +1108,23 @@ void SessionPrivate::connectToServer(bool afterConfig) {
+ 	_pingId = _pingMsgId = _pingIdToSend = _pingSendAt = 0;
+ 	_pingSender.cancel();
+ 
+-	_waitForConnectedTimer.callOnce(_waitForConnected);
++	auto waitForConnected = _waitForConnected;
++	const auto &proxy = _options->proxy;
++	const auto slowFakeTls = [&] {
++		if (!ProxyData::globalSlowMode()
++			|| proxy.type != ProxyData::Type::Mtproto) {
++			return false;
++		}
++		const auto secret = proxy.secretFromMtprotoPassword();
++		return secret.size() > 17
++			&& secret.front() == bytes::type(0xEE);
++	}();
++	if (slowFakeTls) {
++		for (const auto &connection : _testConnections) {
++			accumulate_max(
++				waitForConnected,
++				connection.data->fullConnectTimeout() + crl::time(500));
++		}
++	}
++	_waitForConnectedTimer.callOnce(waitForConnected);
+ }

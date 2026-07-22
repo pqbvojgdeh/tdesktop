@@ -1,0 +1,1789 @@
+diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
+index 3e51338c13..a3f1c5fbc1 100644
+--- a/Telegram/SourceFiles/boxes/boxes.style
++++ b/Telegram/SourceFiles/boxes/boxes.style
+@@ -697,10 +697,21 @@ groupStickersField: InputField(defaultMultiSelectSearchField) {
+ groupStickersSubTitleHeight: 48px;
+ 
+ proxyUsePadding: margins(22px, 6px, 22px, 5px);
++proxySettingsWidth: 540px;
++proxySettingsControlLabelWidth: 160px;
++proxySettingsNumberWidth: 90px;
++proxySettingsUnitWidth: 24px;
++proxySettingsNumberInput: InputField(connectionPortInputField) {
++	textMargins: margins(0px, 17px, 0px, 4px);
++}
+ proxyTryIPv6Padding: margins(22px, 8px, 22px, 5px);
+ proxyRowPadding: margins(22px, 8px, 8px, 8px);
++proxyRowSelectedPadding: margins(6px, 2px, 6px, 2px);
++proxyRowSelectedRadius: 8px;
++proxyRowSelectedBg: windowBgOver;
+ proxyRowIconSkip: 32px;
+ proxyRowSkip: 2px;
++proxyRowStatusSkip: 8px;
+ proxyRowRipple: defaultRippleAnimationBgOver;
+ proxyRowTitleFg: windowFg;
+ proxyRowTitlePalette: TextPalette(defaultTextPalette) {
+diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
+index 6d99e31da3..bb3e4077e1 100644
+--- a/Telegram/SourceFiles/boxes/connection_box.cpp
++++ b/Telegram/SourceFiles/boxes/connection_box.cpp
+@@ -59,30 +59,97 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "styles/style_menu_icons.h"
+ #include "styles/style_settings.h"
+ 
++#include <QtCore/QCollator>
++#include <QtCore/QTimer>
++#include <QtCore/QTime>
+ #include <QtGui/QGuiApplication>
+ #include <QtGui/QClipboard>
++#include <QtGui/QIntValidator>
+ #include <QtWidgets/QTextEdit>
+ 
++#include <array>
++#include <limits>
++
+ namespace {
+ 
+ constexpr auto kSaveSettingsDelayedTimeout = crl::time(1000);
+ 
+ using ProxyData = MTP::ProxyData;
+ 
+-[[nodiscard]] int ClosestProxyRotationTimeoutSection(int value) {
+-	auto result = 0;
+-	auto bestDistance = 0;
+-	for (auto i = 0; i != int(Core::SettingsProxy::kProxyRotationTimeouts.size()); ++i) {
+-		const auto current = Core::SettingsProxy::kProxyRotationTimeouts[i];
+-		const auto distance = (current > value) ? (current - value) : (value - current);
+-		if ((i == 0) || (distance < bestDistance)) {
+-			result = i;
+-			bestDistance = distance;
+-		}
++[[nodiscard]] bool UsesFakeTls(const ProxyData &proxy) {
++	if (proxy.type != ProxyData::Type::Mtproto) {
++		return false;
++	}
++	const auto secret = proxy.secretFromMtprotoPassword();
++	return secret.size() >= 21 && secret[0] == bytes::type(0xEE);
++}
++
++[[nodiscard]] QString FormatProxyEndpoint(const QString &host, uint32 port) {
++	return qthelp::is_ipv6(host)
++		? u"[%1]:%2"_q.arg(host).arg(port)
++		: u"%1:%2"_q.arg(host).arg(port);
++}
++
++[[nodiscard]] QString ClientHelloName(ProxyData::CHelloType type) {
++	switch (type) {
++	case ProxyData::CHelloType::Chrome:
++		return u"Google Chrome (Telegram profile)"_q;
++	case ProxyData::CHelloType::Custom:
++		return u"Mozilla Firefox 151 — permuted extensions"_q;
++	case ProxyData::CHelloType::SafariMac:
++		return u"Apple Safari 26.4 (macOS)"_q;
++	case ProxyData::CHelloType::YandexGost:
++		return u"Yandex Browser (GOST)"_q;
++	case ProxyData::CHelloType::Chromium150:
++		return u"Chromium 150"_q;
++	case ProxyData::CHelloType::RANDOM:
++		return u"Random on each connection"_q;
++	case ProxyData::CHelloType::Firefox:
++	default:
++		return u"Mozilla Firefox 151"_q;
++	}
++}
++
++[[nodiscard]] QString ClientHelloStatusText(const ProxyData &proxy) {
++	const auto status = ProxyData::globalCHelloStatus(proxy);
++	if (!status.used) {
++		return u"Last connection\nNot used yet"_q;
++	}
++	auto result = QString();
++	if (status.random) {
++		result += u"Random selection · "_q;
++	}
++	result += ClientHelloName(status.actual);
++	if (status.chromium150) {
++		result += status.resumed
++			? u" · resumed profile"_q
++			: u" · fresh profile"_q;
++	}
++	if (!status.host.isEmpty()) {
++		const auto actual = FormatProxyEndpoint(status.host, status.port);
++		const auto original = FormatProxyEndpoint(proxy.host, proxy.port);
++		const auto resolved = proxy.tryCustomResolve()
++			&& (status.host.compare(proxy.host, Qt::CaseInsensitive) != 0);
++		result += u"\n"_q + (resolved
++			? original + u" → "_q + actual
++			: actual);
++	}
++	if (status.chromium150 && status.ttlMinutes > 0) {
++		result += status.resumed
++			? u"\nProfile refresh in %1 min"_q.arg(status.ttlLeftMinutes)
++			: u"\nResume window: %1 min"_q.arg(status.ttlLeftMinutes);
+ 	}
+ 	return result;
+ }
+ 
++[[nodiscard]] QString SlowModeSummary(const Core::SettingsProxy &settings) {
++	return settings.proxySlowMode()
++		? u"Current range: %1–%2 ms"_q
++			.arg(settings.proxySlowDelay())
++			.arg(settings.proxySlowDelay() + settings.proxySlowJitter())
++		: u"No additional delay"_q;
++}
++
+ [[nodiscard]] std::vector<QString> ExtractLinkCandidates(const QString &input) {
+ 	auto urls = std::vector<QString>();
+ 	static const auto urlRegex = QRegularExpression(
+@@ -560,6 +627,7 @@ public:
+ 	ProxyRow(QWidget *parent, View &&view);
+ 
+ 	void updateFields(View &&view);
++	void setSelectionEnabled(bool enabled);
+ 
+ 	rpl::producer<> deleteClicks() const;
+ 	rpl::producer<> restoreClicks() const;
+@@ -582,6 +650,7 @@ private:
+ 	View _view;
+ 
+ 	Ui::Text::String _title;
++	QString _endpoint;
+ 	object_ptr<Ui::IconButton> _menuToggle;
+ 	rpl::event_stream<> _deleteClicks;
+ 	rpl::event_stream<> _restoreClicks;
+@@ -591,6 +660,7 @@ private:
+ 	base::unique_qptr<Ui::DropdownMenu> _menu;
+ 
+ 	bool _set = false;
++	bool _selectionEnabled = true;
+ 	Ui::Animations::Simple _toggled;
+ 	Ui::Animations::Simple _setAnimation;
+ 	std::unique_ptr<Ui::InfiniteRadialAnimation> _progress;
+@@ -626,16 +696,37 @@ private:
+ 	int rowHeight() const;
+ 	void refreshProxyForCalls();
+ 	void refreshProxyRotation();
++	void refreshProxySlowMode();
++	void refreshProxyCHelloStatus();
++	void refreshCustomControls();
++	void rebuildRows();
+ 
+ 	not_null<ProxiesBoxController*> _controller;
+ 	Core::SettingsProxy &_settings;
+-	QPointer<Ui::Checkbox> _tryIPv6;
+ 	std::shared_ptr<Ui::RadioenumGroup<ProxyData::Settings>> _proxySettings;
+-	QPointer<Ui::SlideWrap<Ui::Checkbox>> _proxyForCalls;
+-	QPointer<Ui::SlideWrap<Ui::Checkbox>> _proxyRotation;
++	QPointer<Settings::Button> _proxyAddressPriorityButton;
++	rpl::variable<bool> _proxyAddressPriorityValue;
++	QPointer<Settings::Button> _proxyCHelloButton;
++	rpl::variable<QString> _proxyCHelloLabel;
++	QPointer<Ui::FlatLabel> _proxyCHelloStatus;
++	QPointer<QTimer> _proxyCHelloStatusTimer;
++	QPointer<Ui::SlideWrap<Ui::SettingsButton>> _proxyForCalls;
++	QPointer<Ui::SlideWrap<Ui::SettingsButton>> _proxyRotation;
++	rpl::variable<bool> _proxyRotationValue;
+ 	QPointer<Ui::SlideWrap<Ui::VerticalLayout>> _proxyRotationOptions;
+-	QPointer<Ui::SettingsSlider> _proxyRotationTimeout;
+-	QPointer<Ui::DividerLabel> _about;
++	QPointer<Ui::NumberInput> _proxyRotationTimeoutInput;
++	QPointer<Ui::FlatLabel> _about;
++	QPointer<Settings::Button> _proxySlowMode;
++	rpl::variable<bool> _proxySlowModeValue;
++	QPointer<Ui::FlatLabel> _proxySlowSummary;
++	QPointer<Ui::SlideWrap<Ui::VerticalLayout>> _proxySlowModeOptionsLayout;
++	QPointer<Ui::VerticalLayout> _proxySlowModeOptions;
++	QPointer<Ui::MaskedInputField> _proxySlowDelayInput;
++	QPointer<Ui::MaskedInputField> _proxySlowJitterInput;
++	QPointer<Settings::Button> _refreshChecksButton;
++	rpl::variable<QString> _checksCaption = u"Not checked"_q;
++	bool _checksStarted = false;
++	bool _proxyCHelloReconnectPending = false;
+ 	base::unique_qptr<Ui::RpWidget> _noRows;
+ 	object_ptr<Ui::VerticalLayout> _initialWrap;
+ 	QPointer<Ui::VerticalLayout> _wrap;
+@@ -746,13 +837,12 @@ void ProxyRow::updateFields(View &&view) {
+ 			st::defaultRadio.duration);
+ 	}
+ 	_view = std::move(view);
+-	const auto endpoint = _view.host + ':' + QString::number(_view.port);
++	_endpoint = qthelp::is_ipv6(_view.host)
++		? (u"["_q + _view.host + u"]:"_q + QString::number(_view.port))
++		: (_view.host + u":"_q + QString::number(_view.port));
+ 	_title.setMarkedText(
+ 		st::proxyRowTitleStyle,
+-		TextWithEntities()
+-			.append(_view.type)
+-			.append(' ')
+-			.append(tr::link(endpoint, QString())),
++		TextWithEntities().append(_view.type),
+ 		Ui::ItemTextDefaultOptions());
+ 
+ 	const auto state = _view.state;
+@@ -786,7 +876,7 @@ void ProxyRow::updateFields(View &&view) {
+ 			st::defaultRadio.duration);
+ 	}
+ 
+-	setPointerCursor(!_view.deleted);
++	setPointerCursor(_selectionEnabled && !_view.deleted);
+ 
+ 	update();
+ }
+@@ -797,11 +887,19 @@ void ProxyRow::radialAnimationCallback() {
+ 	}
+ }
+ 
++void ProxyRow::setSelectionEnabled(bool enabled) {
++	_selectionEnabled = enabled;
++	setPointerCursor(enabled && !_view.deleted);
++	update();
++}
++
+ int ProxyRow::resizeGetHeight(int newWidth) {
+ 	const auto result = st::proxyRowPadding.top()
+ 		+ st::semiboldFont->height
+ 		+ st::proxyRowSkip
+ 		+ st::normalFont->height
++		+ st::proxyRowSkip
++		+ st::normalFont->height
+ 		+ st::proxyRowPadding.bottom();
+ 	auto right = st::proxyRowPadding.right();
+ 	_menuToggle->moveToRight(
+@@ -817,6 +915,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
+ 
+ void ProxyRow::paintEvent(QPaintEvent *e) {
+ 	Painter p(this);
++	if (_view.selected && !_view.deleted) {
++		p.setPen(Qt::NoPen);
++		p.setBrush(st::proxyRowSelectedBg);
++		p.drawRoundedRect(
++			rect().marginsRemoved(st::proxyRowSelectedPadding),
++			st::proxyRowSelectedRadius,
++			st::proxyRowSelectedRadius);
++	}
+ 
+ 	if (!_view.deleted) {
+ 		paintRipple(p, 0, 0);
+@@ -830,7 +936,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+ 		p.setOpacity(st::stickersRowDisabledOpacity);
+ 	}
+ 
++	p.save();
++	if (!_selectionEnabled) {
++		p.setOpacity(st::stickersRowDisabledOpacity);
++	}
+ 	paintCheck(p);
++	p.restore();
+ 
+ 	p.setPen(st::proxyRowTitleFg);
+ 	p.setFont(st::semiboldFont);
+@@ -850,41 +961,70 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+ 			return st::proxyRowStatusFg;
+ 		}
+ 	}();
++	p.setFont(st::normalFont);
+ 	const auto status = [&] {
+ 		switch (_view.state) {
+-		case State::Available:
+-			return tr::lng_proxy_available(
+-				tr::now,
+-				lt_ping,
+-				QString::number(_view.ping));
+-		case State::Checking:
+-			return tr::lng_proxy_checking(tr::now);
+-		case State::Connecting:
+-			return tr::lng_proxy_connecting(tr::now);
+-		case State::Online:
+-			return tr::lng_proxy_online(tr::now);
+-		case State::Unavailable:
+-			return tr::lng_proxy_unavailable(tr::now);
++		case State::Available: return u"available"_q;
++		case State::Checking: return u"checking…"_q;
++		case State::Connecting: return u"connecting…"_q;
++		case State::Online: return u"connected"_q;
++		case State::Unavailable: return u"unavailable"_q;
++		case State::Inactive: return u"not checked"_q;
+ 		}
+ 		Unexpected("State in ProxyRow::paintEvent.");
+ 	}();
++	const auto statusWidth = st::normalFont->width(status);
++	const auto statusSkip = st::proxyRowStatusSkip;
++	const auto endpointAvailable = std::max(
++		availableWidth - statusWidth - statusSkip,
++		0);
++	const auto endpoint = st::normalFont->elided(
++		_endpoint,
++		endpointAvailable,
++		Qt::ElideMiddle);
++	p.setPen(st::proxyRowTitleFg);
++	p.drawTextLeft(left, top, width(), endpoint);
++	const auto statusLeft = left
++		+ st::normalFont->width(endpoint)
++		+ statusSkip;
+ 	p.setPen(_view.deleted ? st::proxyRowStatusFg : statusFg);
+-	p.setFont(st::normalFont);
++	p.drawTextLeft(statusLeft, top, width(), status);
++	top += st::normalFont->height + st::proxyRowSkip;
+ 
+-	auto statusLeft = left;
++	auto detailLeft = left;
+ 	if (_checking) {
+ 		_checking->draw(
+ 			p,
+ 			{
+-				st::proxyCheckingPosition.x() + statusLeft,
++				st::proxyCheckingPosition.x() + detailLeft,
+ 				st::proxyCheckingPosition.y() + top
+ 			},
+ 			width());
+-		statusLeft += st::proxyCheckingPosition.x()
++		detailLeft += st::proxyCheckingPosition.x()
+ 			+ st::proxyCheckingAnimation.size.width()
+ 			+ st::proxyCheckingSkip;
+ 	}
+-	p.drawTextLeft(statusLeft, top, width(), status);
++	const auto detail = [&] {
++		if (_view.state == State::Checking) {
++			return u"Telegram RTT: measuring…"_q;
++		} else if (_view.state == State::Unavailable) {
++			return _view.checkedAt.isEmpty()
++				? u"Last check: unavailable"_q
++				: u"Last check: unavailable · checked "_q + _view.checkedAt;
++		} else if (_view.ping > 0) {
++			return u"Telegram RTT: %1 ms"_q.arg(_view.ping)
++				+ (_view.checkedAt.isEmpty()
++					? QString()
++					: u" · checked "_q + _view.checkedAt);
++		}
++		return QString();
++	}();
++	p.setPen(st::proxyRowStatusFg);
++	p.drawTextLeft(
++		detailLeft,
++		top,
++		width(),
++		st::normalFont->elided(detail, availableWidth));
+ 	top += st::normalFont->height + st::proxyRowPadding.bottom();
+ }
+ 
+@@ -962,23 +1102,23 @@ void ProxyRow::showMenu() {
+ 			const style::icon *icon) {
+ 		return _menu->addAction(text, std::move(callback), icon);
+ 	};
+-	addAction(tr::lng_proxy_menu_edit(tr::now), [=] {
++	addAction(u"Edit"_q, [=] {
+ 		_editClicks.fire({});
+ 	}, &st::menuIconEdit);
+ 	if (_view.supportsShare) {
+-		addAction(tr::lng_proxy_edit_share(tr::now), [=] {
++		addAction(u"Share"_q, [=] {
+ 			_shareClicks.fire({});
+ 		}, &st::menuIconShare);
+-		addAction(tr::lng_group_invite_context_qr(tr::now), [=] {
++		addAction(u"QR code"_q, [=] {
+ 			_showQrClicks.fire({});
+ 		}, &st::menuIconQrCode);
+ 	}
+ 	if (_view.deleted) {
+-		addAction(tr::lng_proxy_menu_restore(tr::now), [=] {
++		addAction(u"Restore"_q, [=] {
+ 			_restoreClicks.fire({});
+ 		}, &st::menuIconRestore);
+ 	} else {
+-		addAction(tr::lng_proxy_menu_delete(tr::now), [=] {
++		addAction(u"Delete"_q, [=] {
+ 			_deleteClicks.fire({});
+ 		}, &st::menuIconDelete);
+ 	}
+@@ -1020,6 +1160,10 @@ ProxiesBox::ProxiesBox(
+ 	const QString &highlightId)
+ : _controller(controller)
+ , _settings(settings)
++, _proxyAddressPriorityValue(settings.proxyPreferIPv6())
++, _proxyCHelloLabel(ClientHelloName(settings.proxyCHelloType()))
++, _proxyRotationValue(settings.proxyRotationEnabled())
++, _proxySlowModeValue(settings.proxySlowMode())
+ , _initialWrap(this)
+ , _highlightId(highlightId) {
+ 	_controller->views(
+@@ -1041,10 +1185,10 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
+ }
+ 
+ void ProxiesBox::prepare() {
+-	setTitle(tr::lng_proxy_settings());
++	setTitle(rpl::single(u"Proxy settings"_q));
+ 
+-	_addProxyButton = addButton(tr::lng_proxy_add(), [=] { addNewProxy(); });
+-	addButton(tr::lng_close(), [=] { closeBox(); });
++	_addProxyButton = addButton(rpl::single(u"Add proxy"_q), [=] { addNewProxy(); });
++	addButton(rpl::single(u"Close"_q), [=] { closeBox(); });
+ 
+ 	setupTopButton();
+ 	setupContent();
+@@ -1077,14 +1221,24 @@ void ProxiesBox::setupTopButton() {
+ 			st::popupMenuWithIcons);
+ 		const auto raw = menu->get();
+ 		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
++		const auto ipv6Disabled = !_settings.tryIPv6();
++		addAction({
++			.text = u"Disable IPv6 for proxies"_q,
++			.handler = [=] {
++				_controller->setTryIPv6(ipv6Disabled);
++				_proxyAddressPriorityValue = _settings.proxyPreferIPv6();
++				refreshCustomControls();
++			},
++			.icon = ipv6Disabled ? &st::menuIconSelect : nullptr,
++		});
+ 		addAction({
+-			.text = tr::lng_proxy_add_from_clipboard(tr::now),
++			.text = u"Add from clipboard"_q,
+ 			.handler = [=] { AddProxyFromClipboard(_controller, uiShow()); },
+ 			.icon = &st::menuIconImportTheme,
+ 		});
+ 		if (!_rows.empty()) {
+ 			addAction({
+-				.text = tr::lng_group_invite_context_delete_all(tr::now),
++				.text = u"Delete all"_q,
+ 				.handler = [=] { _controller->deleteItems(); },
+ 				.icon = &st::menuIconDeleteAttention,
+ 				.isAttention = true,
+@@ -1106,13 +1260,16 @@ void ProxiesBox::setupTopButton() {
+ 
+ void ProxiesBox::setupContent() {
+ 	const auto inner = setInnerWidget(object_ptr<Ui::VerticalLayout>(this));
++	const auto addSectionTitle = [=](QString title) {
++		return inner->add(
++			object_ptr<Ui::FlatLabel>(
++				inner,
++				std::move(title),
++				st::proxyEditTitle),
++			st::proxyEditTitlePadding);
++	};
+ 
+-	_tryIPv6 = inner->add(
+-		object_ptr<Ui::Checkbox>(
+-			inner,
+-			tr::lng_connection_try_ipv6(tr::now),
+-			_settings.tryIPv6()),
+-		st::proxyTryIPv6Padding);
++	addSectionTitle(u"Connection"_q);
+ 	_proxySettings
+ 		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
+ 			_settings.settings());
+@@ -1121,90 +1278,255 @@ void ProxiesBox::setupContent() {
+ 			inner,
+ 			_proxySettings,
+ 			ProxyData::Settings::Disabled,
+-			tr::lng_proxy_disable(tr::now)),
++			u"Disable proxy"_q),
+ 		st::proxyUsePadding);
+ 	inner->add(
+ 		object_ptr<Ui::Radioenum<ProxyData::Settings>>(
+ 			inner,
+ 			_proxySettings,
+ 			ProxyData::Settings::System,
+-			tr::lng_proxy_use_system_settings(tr::now)),
++			u"Use system proxy settings"_q),
+ 		st::proxyUsePadding);
+ 	inner->add(
+ 		object_ptr<Ui::Radioenum<ProxyData::Settings>>(
+ 			inner,
+ 			_proxySettings,
+ 			ProxyData::Settings::Enabled,
+-			tr::lng_proxy_use_custom(tr::now)),
++			u"Use custom proxy"_q),
+ 		st::proxyUsePadding);
+-	_proxyForCalls = inner->add(
+-		object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
++
++	_proxyAddressPriorityButton = Settings::AddButtonWithIcon(
++		inner,
++		rpl::single(u"Prefer IPv6"_q),
++		st::settingsButtonNoIcon);
++	_proxyAddressPriorityButton->toggleOn(
++		_proxyAddressPriorityValue.value());
++	inner->add(
++		object_ptr<Ui::FlatLabel>(
+ 			inner,
+-			object_ptr<Ui::Checkbox>(
+-				inner,
+-				tr::lng_proxy_use_for_calls(tr::now),
+-				_settings.useProxyForCalls()),
+-			style::margins(
+-				0,
+-				st::proxyUsePadding.top(),
+-				0,
+-				st::proxyUsePadding.bottom())),
++			u"Hostnames only."_q,
++			st::boxDividerLabel),
++		st::proxyAboutPadding);
++
++	addSectionTitle(u"MTProto disguise"_q);
++	_proxyCHelloButton = Settings::AddButtonWithLabel(
++		inner,
++		rpl::single(u"ClientHello profile"_q),
++		_proxyCHelloLabel.value(),
++		st::settingsButtonNoIcon);
++	const auto clientMenu = _proxyCHelloButton->lifetime().make_state<
++		base::unique_qptr<Ui::PopupMenu>>();
++	_proxyCHelloButton->addClickHandler([=] {
++		if (!_settings.isEnabled()) {
++			return;
++		}
++		*clientMenu = base::make_unique_q<Ui::PopupMenu>(
++			_proxyCHelloButton,
++			st::popupMenuWithIcons);
++		const auto raw = clientMenu->get();
++		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
++		const auto types = std::array{
++			ProxyData::CHelloType::RANDOM,
++			ProxyData::CHelloType::SafariMac,
++			ProxyData::CHelloType::Chromium150,
++			ProxyData::CHelloType::Chrome,
++			ProxyData::CHelloType::Firefox,
++			ProxyData::CHelloType::Custom,
++			ProxyData::CHelloType::YandexGost,
++		};
++		for (const auto type : types) {
++			const auto text = ClientHelloName(type);
++			addAction({
++				.text = text,
++				.handler = [=] {
++					const auto changed = (_settings.proxyCHelloType() != type);
++					if (_controller->setProxyCHelloType(type)) {
++						_proxyCHelloLabel = text;
++						if (changed) {
++							_proxyCHelloReconnectPending = true;
++							refreshProxyCHelloStatus();
++						}
++					}
++				},
++			});
++		}
++		raw->popup(_proxyCHelloButton->mapToGlobal(QPoint(
++			_proxyCHelloButton->width(),
++			_proxyCHelloButton->height())));
++	});
++	_proxyCHelloStatus = inner->add(
++		object_ptr<Ui::FlatLabel>(
++			inner,
++			ClientHelloStatusText(_settings.selected()),
++			st::boxDividerLabel),
+ 		style::margins(
+-			st::proxyTryIPv6Padding.left(),
++			st::proxyUsePadding.left(),
+ 			0,
+-			st::proxyTryIPv6Padding.right(),
+-			st::proxyTryIPv6Padding.top()));
+-	_proxyRotation = inner->add(
+-		object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
++			st::proxyUsePadding.right(),
++			st::proxyRowPadding.top()));
++	refreshProxyCHelloStatus();
++	_proxyCHelloStatusTimer = new QTimer(this);
++	_proxyCHelloStatusTimer->setInterval(1000);
++	connect(_proxyCHelloStatusTimer, &QTimer::timeout, [=] {
++		refreshProxyCHelloStatus();
++		_controller->refreshSelectedView();
++	});
++	_proxyCHelloStatusTimer->start();
++	addSectionTitle(u"Connection behavior"_q);
++	_proxySlowMode = Settings::AddButtonWithIcon(
++		inner,
++		rpl::single(u"Delay repeated connections"_q),
++		st::settingsButtonNoIcon);
++	_proxySlowMode->toggleOn(_proxySlowModeValue.value());
++	_proxySlowSummary = inner->add(
++		object_ptr<Ui::FlatLabel>(
+ 			inner,
+-			object_ptr<Ui::Checkbox>(
++			SlowModeSummary(_settings),
++			st::boxDividerLabel),
++		st::proxyAboutPadding);
++
++	{
++		_proxySlowModeOptionsLayout = inner->add(
++			object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+ 				inner,
+-				tr::lng_proxy_auto_switch(tr::now),
+-				_settings.proxyRotationEnabled()),
+-			style::margins(
+-				0,
+-				st::proxyUsePadding.top(),
+-				0,
+-				st::proxyUsePadding.bottom())),
+-		style::margins(
+-			st::proxyTryIPv6Padding.left(),
+-			0,
+-			st::proxyTryIPv6Padding.right(),
+-			st::proxyTryIPv6Padding.top()));
++				object_ptr<Ui::VerticalLayout>(inner)));
++
++		const auto addNumberRow = [=](
++				const QString &title,
++				const QString &value,
++				const QString &unit,
++				int maximum) {
++			const auto row = _proxySlowModeOptionsLayout->entity()->add(
++				object_ptr<Ui::FixedHeightWidget>(
++					_proxySlowModeOptionsLayout->entity(),
++					st::connectionPortInputField.heightMin),
++				st::proxyEditInputPadding);
++			const auto label = Ui::CreateChild<Ui::FlatLabel>(
++				row,
++				title,
++				st::defaultFlatLabel);
++			const auto input = Ui::CreateChild<Ui::MaskedInputField>(
++				row,
++				st::proxySettingsNumberInput,
++				rpl::single(QString()),
++				value);
++			input->setValidator(new QIntValidator(0, maximum, input));
++			const auto suffix = Ui::CreateChild<Ui::FlatLabel>(
++				row,
++				unit,
++				st::boxDividerLabel);
++			row->widthValue() | rpl::on_next([=](int width) {
++				label->resizeToNaturalWidth(st::proxySettingsControlLabelWidth);
++				label->moveToLeft(
++					0,
++					(row->height() - label->height()) / 2,
++					width);
++				input->resize(
++					st::proxySettingsNumberWidth,
++					input->height());
++				input->moveToRight(st::proxySettingsUnitWidth, 0, width);
++				suffix->resizeToNaturalWidth(st::proxySettingsUnitWidth);
++				suffix->moveToRight(
++					0,
++					(row->height() - suffix->height()) / 2,
++					width);
++			}, row->lifetime());
++			return input;
++		};
++		_proxySlowDelayInput = addNumberRow(
++			u"Minimum delay"_q,
++			QString::number(_settings.proxySlowDelay()),
++			u"ms"_q,
++			9999);
++		_proxySlowJitterInput = addNumberRow(
++			u"Random jitter"_q,
++			QString::number(_settings.proxySlowJitter()),
++			u"ms"_q,
++			9999);
++		_proxySlowModeOptions = _proxySlowModeOptionsLayout->entity();
++	}
++
++	auto callsButton = object_ptr<Ui::SettingsButton>(
++		inner,
++		rpl::single(tr::lng_proxy_use_for_calls(tr::now)),
++		st::settingsButtonNoIcon);
++	callsButton->toggleOn(rpl::single(_settings.useProxyForCalls()));
++	_proxyForCalls = inner->add(
++		object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
++			inner,
++			std::move(callsButton)),
++		style::margins(0, 0, 0, st::proxyTryIPv6Padding.top()));
++
++	_about = addSectionTitle(u"Proxy servers"_q);
++	auto rotationButton = object_ptr<Ui::SettingsButton>(
++		inner,
++		rpl::single(u"Auto-switch proxies"_q),
++		st::settingsButtonNoIcon);
++	rotationButton->toggleOn(_proxyRotationValue.value());
++	_proxyRotation = inner->add(
++		object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
++			inner,
++			std::move(rotationButton)),
++		style::margins(0, 0, 0, st::proxyTryIPv6Padding.top()));
+ 	_proxyRotationOptions = inner->add(
+ 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+ 			inner,
+ 			object_ptr<Ui::VerticalLayout>(inner)));
+-	_proxyRotationTimeout = _proxyRotationOptions->entity()->add(
+-		object_ptr<Ui::SettingsSlider>(
++	const auto timeoutRow = _proxyRotationOptions->entity()->add(
++		object_ptr<Ui::FixedHeightWidget>(
+ 			_proxyRotationOptions->entity(),
+-			st::settingsSlider),
+-		st::settingsBigScalePadding);
+-	for (const auto seconds : Core::SettingsProxy::kProxyRotationTimeouts) {
+-		_proxyRotationTimeout->addSection(
+-			tr::lng_proxy_auto_switch_timeout(
+-				tr::now,
+-				lt_count,
+-				seconds));
+-	}
+-	_proxyRotationTimeout->setActiveSectionFast(
+-		ClosestProxyRotationTimeoutSection(_settings.proxyRotationTimeout()));
++			st::connectionPortInputField.heightMin),
++		st::proxyEditInputPadding);
++	const auto timeoutLabel = Ui::CreateChild<Ui::FlatLabel>(
++		timeoutRow,
++		u"Connection timeout"_q,
++		st::defaultFlatLabel);
++	_proxyRotationTimeoutInput = Ui::CreateChild<Ui::NumberInput>(
++		timeoutRow,
++		st::proxySettingsNumberInput,
++		rpl::single(QString()),
++		QString::number(_settings.proxyRotationTimeout()),
++		9999);
++	const auto timeoutSuffix = Ui::CreateChild<Ui::FlatLabel>(
++		timeoutRow,
++		u"s"_q,
++		st::boxDividerLabel);
++	timeoutRow->widthValue() | rpl::on_next([=](int width) {
++		timeoutLabel->resizeToNaturalWidth(st::proxySettingsControlLabelWidth);
++		timeoutLabel->moveToLeft(
++			0,
++			(timeoutRow->height() - timeoutLabel->height()) / 2,
++			width);
++		_proxyRotationTimeoutInput->resize(
++			st::proxySettingsNumberWidth,
++			_proxyRotationTimeoutInput->height());
++		_proxyRotationTimeoutInput->moveToRight(
++			st::proxySettingsUnitWidth,
++			0,
++			width);
++		timeoutSuffix->resizeToNaturalWidth(st::proxySettingsUnitWidth);
++		timeoutSuffix->moveToRight(
++			0,
++			(timeoutRow->height() - timeoutSuffix->height()) / 2,
++			width);
++	}, timeoutRow->lifetime());
+ 	_proxyRotationOptions->entity()->add(
+ 		object_ptr<Ui::FlatLabel>(
+ 			_proxyRotationOptions->entity(),
+-			tr::lng_proxy_auto_switch_about(tr::now),
++			u"Switches after the selected proxy remains disconnected for this long."_q,
+ 			st::boxDividerLabel),
+ 		st::proxyAboutPadding);
+ 
+-	_about = inner->add(
+-		object_ptr<Ui::DividerLabel>(
+-			inner,
+-			object_ptr<Ui::FlatLabel>(
+-				inner,
+-				tr::lng_proxy_about(tr::now),
+-				st::boxDividerLabel),
+-			st::proxyAboutPadding),
+-		style::margins(0, 0, 0, st::proxyRowPadding.top()));
++	_refreshChecksButton = Settings::AddButtonWithLabel(
++		inner,
++		rpl::single(u"Refresh checks"_q),
++		_checksCaption.value(),
++		st::settingsButtonNoIcon);
++	_refreshChecksButton->addClickHandler([=] {
++		if (_settings.isEnabled()) {
++			_controller->refreshAllChecks();
++		}
++	});
+ 
+ 	_wrap = inner->add(std::move(_initialWrap));
+ 	inner->add(object_ptr<Ui::FixedHeightWidget>(
+@@ -1218,41 +1540,129 @@ void ProxiesBox::setupContent() {
+ 		}
+ 		refreshProxyForCalls();
+ 		refreshProxyRotation();
++		refreshCustomControls();
+ 	});
+-	_tryIPv6->checkedChanges(
++	_proxySlowMode->toggledChanges(
+ 	) | rpl::on_next([=](bool checked) {
+-		_controller->setTryIPv6(checked);
+-	}, _tryIPv6->lifetime());
++		if (!_settings.isEnabled()) {
++			_proxySlowModeValue = _settings.proxySlowMode();
++			return;
++		}
++		_proxySlowModeValue = checked;
++		_controller->setProxySlowMode(checked);
++		_proxySlowSummary->setText(SlowModeSummary(_settings));
++		refreshProxySlowMode();
++	}, _proxySlowMode->lifetime());
++	_proxyAddressPriorityButton->toggledChanges(
++	) | rpl::on_next([=](bool checked) {
++		if (!_settings.isEnabled()
++			|| !_controller->setProxyPreferIPv6(checked)) {
++			_proxyAddressPriorityValue = _settings.proxyPreferIPv6();
++		} else {
++			_proxyAddressPriorityValue = checked;
++		}
++	}, _proxyAddressPriorityButton->lifetime());
++	connect(_proxySlowDelayInput, &Ui::MaskedInputField::changed, [=] {
++		if (!_settings.isEnabled()) {
++			return;
++		}
++		auto ok = false;
++		const auto value = _proxySlowDelayInput->getLastText().toInt(&ok);
++		if (ok && _controller->setProxySlowDelay(value)) {
++			_proxySlowSummary->setText(SlowModeSummary(_settings));
++		}
++	});
++
++	connect(_proxySlowJitterInput, &Ui::MaskedInputField::changed, [=] {
++		if (!_settings.isEnabled()) {
++			return;
++		}
++		auto ok = false;
++		const auto value = _proxySlowJitterInput->getLastText().toInt(&ok);
++		if (ok && _controller->setProxySlowJitter(value)) {
++			_proxySlowSummary->setText(SlowModeSummary(_settings));
++		}
++	});
++	refreshProxySlowMode();
+ 
+ 	_controller->proxySettingsValue(
+ 	) | rpl::on_next([=](ProxyData::Settings value) {
+ 		_proxySettings->setValue(value);
+ 		refreshProxyForCalls();
+ 		refreshProxyRotation();
++		refreshCustomControls();
+ 	}, inner->lifetime());
+ 
+-	_proxyForCalls->entity()->checkedChanges(
++	_proxyForCalls->entity()->toggledChanges(
+ 	) | rpl::on_next([=](bool checked) {
+-		_controller->setProxyForCalls(checked);
++		if (_settings.isEnabled()) {
++			_controller->setProxyForCalls(checked);
++		}
+ 	}, _proxyForCalls->lifetime());
+-	_proxyRotation->entity()->checkedChanges(
++	_proxyRotation->entity()->toggledChanges(
+ 	) | rpl::on_next([=](bool checked) {
++		if (!_settings.isEnabled()) {
++			_proxyRotationValue = _settings.proxyRotationEnabled();
++			return;
++		}
++		_proxyRotationValue = checked;
+ 		_controller->setProxyRotationEnabled(checked);
+ 		refreshProxyRotation();
+ 	}, _proxyRotation->lifetime());
+-	_proxyRotationTimeout->sectionActivated(
+-	) | rpl::on_next([=](int section) {
+-		_controller->setProxyRotationTimeout(
+-			Core::SettingsProxy::kProxyRotationTimeouts[section]);
+-	}, _proxyRotationTimeout->lifetime());
++	connect(
++		_proxyRotationTimeoutInput,
++		&Ui::MaskedInputField::changed,
++		[=] {
++			if (!_settings.isEnabled()) {
++				return;
++			}
++			auto ok = false;
++			const auto value = _proxyRotationTimeoutInput->getLastText().toInt(&ok);
++			if (ok && value > 0) {
++				_controller->setProxyRotationTimeout(value);
++			} else if (ok) {
++				_proxyRotationTimeoutInput->setText(
++					QString::number(_settings.proxyRotationTimeout()));
++			}
++		});
++	connect(
++		_proxyRotationTimeoutInput,
++		&Ui::MaskedInputField::blurred,
++		[=] {
++			auto ok = false;
++			const auto value = _proxyRotationTimeoutInput
++				->getLastText().toInt(&ok);
++			if (!ok || value <= 0) {
++				_proxyRotationTimeoutInput->setText(
++					QString::number(_settings.proxyRotationTimeout()));
++			}
++		});
++	_controller->checksRunningValue(
++	) | rpl::on_next([=](bool running) {
++		if (running) {
++			_checksStarted = true;
++			_checksCaption = u"Checking…"_q;
++		} else {
++			_checksCaption = _checksStarted
++				? u"Completed"_q
++				: u"Not checked"_q;
++		}
++		refreshCustomControls();
++	}, inner->lifetime());
++	_controller->checksFinished(
++	) | rpl::on_next([=] {
++		rebuildRows();
++	}, inner->lifetime());
+ 
+ 	if (_rows.empty()) {
+ 		createNoRowsLabel();
+ 	}
+ 	refreshProxyForCalls();
+ 	refreshProxyRotation();
++	refreshCustomControls();
+ 	_proxyForCalls->finishAnimating();
+ 	_proxyRotation->finishAnimating();
++	_proxySlowModeOptionsLayout->finishAnimating();
+ 	_proxyRotationOptions->finishAnimating();
+ 
+ 	{
+@@ -1262,7 +1672,7 @@ void ProxiesBox::setupContent() {
+ 				object_ptr<Ui::VerticalLayout>(inner)));
+ 		const auto shareList = Settings::AddButtonWithIcon(
+ 			wrap->entity(),
+-			tr::lng_proxy_edit_share_list_button(),
++			rpl::single(u"Share proxy list"_q),
+ 			st::settingsButton,
+ 			{ &st::menuIconCopy });
+ 		_shareListButton = shareList;
+@@ -1273,7 +1683,7 @@ void ProxiesBox::setupContent() {
+ 		wrap->finishAnimating();
+ 	}
+ 
+-	inner->resizeToWidth(st::boxWideWidth);
++	inner->resizeToWidth(st::proxySettingsWidth);
+ 
+ 	inner->heightValue(
+ 	) | rpl::map([=](int height) {
+@@ -1284,7 +1694,7 @@ void ProxiesBox::setupContent() {
+ 			st::boxMaxListHeight);
+ 	}) | rpl::distinct_until_changed(
+ 	) | rpl::on_next([=](int height) {
+-		setDimensions(st::boxWideWidth, height);
++		setDimensions(st::proxySettingsWidth, height);
+ 	}, inner->lifetime());
+ }
+ 
+@@ -1293,8 +1703,7 @@ void ProxiesBox::refreshProxyForCalls() {
+ 		return;
+ 	}
+ 	_proxyForCalls->toggle(
+-		(_proxySettings->current() == ProxyData::Settings::Enabled
+-			&& _currentProxySupportsCallsId != 0),
++		(_currentProxySupportsCallsId != 0),
+ 		anim::type::normal);
+ }
+ 
+@@ -1302,14 +1711,120 @@ void ProxiesBox::refreshProxyRotation() {
+ 	if (!_proxyRotation || !_proxyRotationOptions) {
+ 		return;
+ 	}
+-	const auto visible = (_proxySettings->current()
+-			== ProxyData::Settings::Enabled)
+-		&& _settings.selected()
++	const auto custom = _settings.isEnabled();
++	const auto visible = _settings.selected()
+ 		&& (_settings.list().size() > 1);
+ 	_proxyRotation->toggle(visible, anim::type::normal);
++	_proxyRotation->entity()->setDisabled(!custom);
+ 	_proxyRotationOptions->toggle(
+-		visible && _proxyRotation->entity()->checked(),
++		visible && _proxyRotation->entity()->toggled(),
+ 		anim::type::normal);
++	_proxyRotationOptions->entity()->setDisabled(!custom);
++}
++
++void ProxiesBox::refreshProxySlowMode() {
++	if (!_proxySlowMode || !_proxySlowModeOptions || !_proxySlowModeOptionsLayout) {
++		return;
++	}
++	_proxySlowModeOptionsLayout->toggle(true, anim::type::normal);
++	const auto active = _proxySlowMode->toggled()
++		&& _settings.isEnabled()
++		&& _controller->selectedUsesFakeTls();
++	_proxySlowModeOptions->setDisabled(!active);
++}
++
++void ProxiesBox::refreshProxyCHelloStatus() {
++	if (!_proxyCHelloStatus) {
++		return;
++	}
++	if (!_controller->selectedUsesFakeTls()) {
++		_proxyCHelloReconnectPending = false;
++		_proxyCHelloStatus->setText(
++			u"Available for MTProto FakeTLS proxies"_q);
++		return;
++	}
++	const auto status = ProxyData::globalCHelloStatus(_settings.selected());
++	const auto currentProfileApplied = status.used
++		&& (status.configured == _settings.proxyCHelloType());
++	if (_proxyCHelloReconnectPending && !currentProfileApplied) {
++		_proxyCHelloStatus->setText(
++			u"Reconnecting\nSelected profile: "_q
++			+ ClientHelloName(_settings.proxyCHelloType()));
++		return;
++	}
++	_proxyCHelloReconnectPending = false;
++	_proxyCHelloStatus->setText(ClientHelloStatusText(_settings.selected()));
++}
++
++void ProxiesBox::refreshCustomControls() {
++	if (!_proxySettings) {
++		return;
++	}
++	const auto custom = _settings.isEnabled();
++	const auto fakeTls = _controller->selectedUsesFakeTls();
++	const auto setButtonEnabled = [](Ui::SettingsButton *button, bool enabled) {
++		button->setDisabled(!enabled);
++		button->setToggleLocked(!enabled);
++		button->setColorOverride(enabled
++			? std::nullopt
++			: std::optional<QColor>(st::windowSubTextFg->c));
++		button->setEnabled(enabled);
++	};
++	const auto setFieldEnabled = [](QLineEdit *field, bool enabled) {
++		field->setReadOnly(!enabled);
++		field->setEnabled(enabled);
++	};
++	if (_proxyAddressPriorityButton) {
++		setButtonEnabled(
++			_proxyAddressPriorityButton,
++			custom
++				&& _settings.tryIPv6()
++				&& _controller->selectedUsesHostname());
++	}
++	if (_proxyCHelloButton) {
++		setButtonEnabled(_proxyCHelloButton, custom && fakeTls);
++	}
++	if (_proxyCHelloStatus) {
++		_proxyCHelloStatus->setDisabled(!custom || !fakeTls);
++	}
++	if (_proxySlowMode) {
++		setButtonEnabled(_proxySlowMode, custom && fakeTls);
++	}
++	if (_proxySlowSummary) {
++		_proxySlowSummary->setDisabled(!custom || !fakeTls);
++	}
++	if (_proxySlowDelayInput) {
++		setFieldEnabled(
++			_proxySlowDelayInput,
++			custom && fakeTls && _proxySlowMode->toggled());
++	}
++	if (_proxySlowJitterInput) {
++		setFieldEnabled(
++			_proxySlowJitterInput,
++			custom && fakeTls && _proxySlowMode->toggled());
++	}
++	if (_proxyForCalls) {
++		setButtonEnabled(_proxyForCalls->entity(), custom);
++	}
++	if (_proxyRotation) {
++		setButtonEnabled(_proxyRotation->entity(), custom);
++	}
++	if (_proxyRotationTimeoutInput) {
++		setFieldEnabled(
++			_proxyRotationTimeoutInput,
++			custom && _proxyRotation->entity()->toggled());
++	}
++	if (_refreshChecksButton) {
++		setButtonEnabled(
++			_refreshChecksButton,
++			custom && _checksCaption.current() != u"Checking…"_q);
++	}
++	for (const auto &[id, row] : _rows) {
++		row->setSelectionEnabled(custom);
++	}
++	refreshProxySlowMode();
++	refreshProxyRotation();
++	refreshProxyCHelloStatus();
+ }
+ 
+ int ProxiesBox::rowHeight() const {
+@@ -1317,6 +1832,8 @@ int ProxiesBox::rowHeight() const {
+ 		+ st::semiboldFont->height
+ 		+ st::proxyRowSkip
+ 		+ st::normalFont->height
++		+ st::proxyRowSkip
++		+ st::normalFont->height
+ 		+ st::proxyRowPadding.bottom();
+ }
+ 
+@@ -1339,8 +1856,7 @@ void ProxiesBox::applyView(View &&view) {
+ 			? _wrap.data()
+ 			: _initialWrap.data();
+ 		const auto &[i, ok] = _rows.emplace(id, nullptr);
+-		i->second.reset(wrap->insert(
+-			0,
++		i->second.reset(wrap->add(
+ 			object_ptr<ProxyRow>(
+ 				wrap,
+ 				std::move(view))));
+@@ -1355,6 +1871,18 @@ void ProxiesBox::applyView(View &&view) {
+ 		i->second->updateFields(std::move(view));
+ 	}
+ 	refreshProxyRotation();
++	refreshCustomControls();
++}
++
++void ProxiesBox::rebuildRows() {
++	_rows.clear();
++	_noRows.reset();
++	for (auto view : _controller->snapshot()) {
++		applyView(std::move(view));
++	}
++	if (_rows.empty()) {
++		createNoRowsLabel();
++	}
+ }
+ 
+ void ProxiesBox::createNoRowsLabel() {
+@@ -1364,13 +1892,13 @@ void ProxiesBox::createNoRowsLabel() {
+ 			rowHeight()),
+ 		st::proxyEmptyListPadding));
+ 	_noRows->resize(
+-		(st::boxWideWidth
++		(st::proxySettingsWidth
+ 			- st::proxyEmptyListPadding.left()
+ 			- st::proxyEmptyListPadding.right()),
+ 		_noRows->height());
+ 	const auto label = Ui::CreateChild<Ui::FlatLabel>(
+ 		_noRows.get(),
+-		tr::lng_proxy_description(tr::now),
++		u"Add a proxy server to use a custom connection."_q,
+ 		st::proxyEmptyListLabel);
+ 	_noRows->widthValue(
+ 	) | rpl::on_next([=](int width) {
+@@ -1404,7 +1932,9 @@ void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
+ 
+ 	button->clicks(
+ 	) | rpl::on_next([=] {
+-		_controller->applyItem(id);
++		if (_settings.isEnabled()) {
++			_controller->applyItem(id);
++		}
+ 	}, button->lifetime());
+ }
+ 
+@@ -1704,19 +2234,14 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+ 	) | ranges::views::transform([&](const ProxyData &proxy) {
+ 		return Item{ ++_idCounter, proxy };
+ 	}) | ranges::to_vector;
++	sortListByEndpoint();
+ 
+ 	_settings.connectionTypeChanges(
+ 	) | rpl::on_next([=] {
+ 		_proxySettingsChanges.fire_copy(_settings.settings());
+-		const auto i = findByProxy(_settings.selected());
+-		if (i != end(_list)) {
+-			updateView(*i);
+-		}
++		refreshSelectedView();
+ 	}, _lifetime);
+ 
+-	for (auto &item : _list) {
+-		refreshChecker(item);
+-	}
+ }
+ 
+ void ProxiesBoxController::ShowApplyConfirmation(
+@@ -2003,49 +2528,181 @@ auto ProxiesBoxController::proxySettingsValue() const
+ 	) | rpl::distinct_until_changed();
+ }
+ 
+-void ProxiesBoxController::refreshChecker(Item &item) {
++rpl::producer<bool> ProxiesBoxController::checksRunningValue() const {
++	return _checksRunning.value();
++}
++
++rpl::producer<> ProxiesBoxController::checksFinished() const {
++	return _checksFinished.events();
++}
++
++std::vector<ProxiesBoxController::ItemView> ProxiesBoxController::snapshot() const {
++	return ranges::views::all(
++		_list
++	) | ranges::views::transform([&](const Item &item) {
++		return viewForItem(item);
++	}) | ranges::to_vector;
++}
++
++bool ProxiesBoxController::selectedUsesFakeTls() const {
++	return UsesFakeTls(_settings.selected());
++}
++
++bool ProxiesBoxController::selectedUsesHostname() const {
++	return _settings.selected().tryCustomResolve();
++}
++
++void ProxiesBoxController::refreshChecker(Item &item, bool batch) {
++	const auto finishCancelledBatch = cancelBatchCheck(item);
+ 	item.state = ItemState::Checking;
++	item.ping = 0;
++	item.checkedAt = QString();
++	item.batchCheck = batch;
+ 	const auto id = item.id;
+-	MTP::StartProxyCheck(
++	item.checker = MTP::ScheduleProxyCheck(
+ 		&_account->mtp(),
+ 		item.data,
+ 		Core::App().settings().proxy().tryIPv6(),
+-		item.checker,
+-		item.checkerv6,
+-		[=](Connection *raw, int pingTime) {
+-			const auto item = ranges::find(
+-				_list,
+-				id,
+-				[](const Item &item) { return item.id; });
+-			if (item == end(_list)) {
+-				return;
+-			}
+-			MTP::DropProxyChecker(item->checker, item->checkerv6, raw);
+-			MTP::ResetProxyCheckers(item->checker, item->checkerv6);
+-			if (item->state == ItemState::Checking) {
+-				item->state = ItemState::Available;
+-				item->ping = pingTime;
+-				updateView(*item);
+-			}
++		[=](int pingTime) {
++			checkFinished(id, ItemState::Available, pingTime, batch);
+ 		},
+-		[=](Connection *raw) {
+-			const auto item = ranges::find(
+-				_list,
+-				id,
+-				[](const Item &item) { return item.id; });
+-			if (item == end(_list)) {
+-				return;
+-			}
+-			MTP::DropProxyChecker(item->checker, item->checkerv6, raw);
+-			if (!MTP::HasProxyCheckers(item->checker, item->checkerv6)
+-				&& item->state == ItemState::Checking) {
+-				item->state = ItemState::Unavailable;
+-				updateView(*item);
+-			}
++		[=] {
++			checkFinished(id, ItemState::Unavailable, 0, batch);
+ 		});
+-	if (!MTP::HasProxyCheckers(item.checker, item.checkerv6)) {
+-		item.state = ItemState::Unavailable;
++	updateView(item);
++	if (finishCancelledBatch) {
++		finishChecksBatch();
++	}
++}
++
++bool ProxiesBoxController::cancelBatchCheck(Item &item) {
++	item.checker = nullptr;
++	if (!item.batchCheck) {
++		return false;
+ 	}
++	item.batchCheck = false;
++	return _batchChecksLeft > 0 && --_batchChecksLeft == 0;
++}
++
++void ProxiesBoxController::checkFinished(
++		int id,
++		ItemState state,
++		int ping,
++		bool batch) {
++	const auto item = ranges::find(
++		_list,
++		id,
++		[](const Item &item) { return item.id; });
++	if (item == end(_list)
++		|| item->state != ItemState::Checking
++		|| item->batchCheck != batch) {
++		return;
++	}
++	item->checker = nullptr;
++	item->state = state;
++	item->ping = ping;
++	item->checkedAt = QTime::currentTime().toString(u"HH:mm:ss"_q);
++	item->batchCheck = false;
++	updateView(*item);
++	if (batch && _batchChecksLeft > 0 && --_batchChecksLeft == 0) {
++		finishChecksBatch();
++	}
++}
++
++void ProxiesBoxController::refreshAllChecks() {
++	if (!_settings.isEnabled() || _checksRunning.current()) {
++		return;
++	}
++	_batchChecksLeft = ranges::count(_list, false, &Item::deleted);
++	_checksRunning = (_batchChecksLeft > 0);
++	if (!_batchChecksLeft) {
++		finishChecksBatch();
++		return;
++	}
++	for (auto &item : _list) {
++		if (!item.deleted) {
++			refreshChecker(item, true);
++		}
++	}
++}
++
++void ProxiesBoxController::cancelAllChecks() {
++	for (auto &item : _list) {
++		item.checker = nullptr;
++		item.batchCheck = false;
++		item.state = ItemState::Inactive;
++		item.ping = 0;
++		item.checkedAt = QString();
++		updateView(item);
++	}
++	sortListByEndpoint();
++	_batchChecksLeft = 0;
++	_checksRunning = false;
++	_checksFinished.fire({});
++}
++
++void ProxiesBoxController::finishChecksBatch() {
++	_batchChecksLeft = 0;
++	const auto rank = [&](const Item &item) {
++		switch (viewForItem(item).state) {
++		case ItemState::Online:
++		case ItemState::Available: return 0;
++		case ItemState::Connecting:
++		case ItemState::Checking:
++		case ItemState::Inactive: return 1;
++		case ItemState::Unavailable: return 2;
++		}
++		Unexpected("ItemState in ProxiesBoxController::finishChecksBatch.");
++	};
++	std::stable_sort(begin(_list), end(_list), [&](const Item &a, const Item &b) {
++		if (a.deleted != b.deleted) {
++			return !a.deleted;
++		}
++		const auto aRank = rank(a);
++		const auto bRank = rank(b);
++		if (aRank != bRank) {
++			return aRank < bRank;
++		}
++		if (aRank != 0) {
++			return compareEndpoints(a, b) < 0;
++		}
++		const auto aPing = a.ping > 0 ? a.ping : std::numeric_limits<int>::max();
++		const auto bPing = b.ping > 0 ? b.ping : std::numeric_limits<int>::max();
++		return (aPing != bPing)
++			? (aPing < bPing)
++			: (compareEndpoints(a, b) < 0);
++	});
++	_checksRunning = false;
++	_checksFinished.fire({});
++}
++
++int ProxiesBoxController::compareEndpoints(
++		const Item &a,
++		const Item &b) const {
++	static const auto collator = [] {
++		auto result = QCollator(QLocale::c());
++		result.setCaseSensitivity(Qt::CaseInsensitive);
++		result.setNumericMode(true);
++		return result;
++	}();
++	const auto host = collator.compare(a.data.host, b.data.host);
++	if (host != 0) {
++		return host;
++	} else if (a.data.port != b.data.port) {
++		return (a.data.port < b.data.port) ? -1 : 1;
++	} else if (a.data.type != b.data.type) {
++		return (int(a.data.type) < int(b.data.type)) ? -1 : 1;
++	}
++	return (a.id == b.id) ? 0 : (a.id < b.id ? -1 : 1);
++}
++
++void ProxiesBoxController::sortListByEndpoint() {
++	std::stable_sort(begin(_list), end(_list), [=](const Item &a, const Item &b) {
++		if (a.deleted != b.deleted) {
++			return !a.deleted;
++		}
++		return compareEndpoints(a, b) < 0;
++	});
+ }
+ 
+ object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
+@@ -2146,6 +2803,7 @@ void ProxiesBoxController::applyItem(int id) {
+ 
+ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+ 	auto item = findById(id);
++	const auto finishCancelledBatch = deleted && cancelBatchCheck(*item);
+ 	item->deleted = deleted;
+ 
+ 	if (deleted) {
+@@ -2195,6 +2853,9 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+ 	}
+ 	saveDelayed();
+ 	updateView(*item);
++	if (finishCancelledBatch) {
++		finishChecksBatch();
++	}
+ }
+ 
+ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2217,17 +2878,23 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+ void ProxiesBoxController::replaceItemWith(
+ 		std::vector<Item>::iterator which,
+ 		std::vector<Item>::iterator with) {
++	const auto finishCancelledBatch = cancelBatchCheck(*which);
++	const auto replacementId = with->id;
++	const auto replacementDeleted = with->deleted;
+ 	const auto removed = _settings.removeFromList(which->data);
+ 	Assert(removed);
+ 
+ 	_views.fire({ which->id });
+ 	_list.erase(which);
+ 
+-	if (with->deleted) {
+-		restoreItem(with->id);
++	if (replacementDeleted) {
++		restoreItem(replacementId);
+ 	}
+-	applyItem(with->id);
++	applyItem(replacementId);
+ 	saveDelayed();
++	if (finishCancelledBatch) {
++		finishChecksBatch();
++	}
+ }
+ 
+ void ProxiesBoxController::replaceItemValue(
+@@ -2297,11 +2964,80 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+ 		}
+ 	}
+ 	Core::App().setCurrentProxy(_settings.selected(), value);
++	if (value == ProxyData::Settings::Enabled) {
++		refreshAllChecks();
++	} else {
++		cancelAllChecks();
++	}
++	saveDelayed();
++	return true;
++}
++
++bool ProxiesBoxController::setProxyCHelloType(ProxyData::CHelloType value) {
++	if (!_settings.isEnabled()) {
++		return false;
++	}
++	if (_settings.proxyCHelloType() == value) {
++		return true;
++	}
++	_settings.setProxyCHelloType(value);
++	MTP::ProxyData::setGlobalClientHelloRulesType(value);
++	MTP::ProxyData::clearGlobalCHelloStatuses();
++	Core::App().restartMtpForProxyConfigurationChange();
++	_settings.connectionTypeChangesNotify();
++	saveDelayed();
++	return true;
++}
++
++bool ProxiesBoxController::setProxySlowMode(bool value) {
++	if (!_settings.isEnabled()) {
++		return false;
++	}
++	if (_settings.proxySlowMode() == value) {
++		return true;
++	}
++	_settings.setProxySlowMode(value);
++	MTP::ProxyData::setGlobalSlowMode(value);
++	saveDelayed();
++	return true;
++}
++
++bool ProxiesBoxController::setProxySlowDelay(int value) {
++	if (!_settings.isEnabled()) {
++		return false;
++	}
++	if (value < 0 || value > Core::SettingsProxy::kMaximumTimingValue) {
++		return false;
++	}
++	if (_settings.proxySlowDelay() == value) {
++		return true;
++	}
++	_settings.setProxySlowDelay(value);
++	MTP::ProxyData::setGlobalSlowDelay(value);
++	saveDelayed();
++	return true;
++}
++
++bool ProxiesBoxController::setProxySlowJitter(int value) {
++	if (!_settings.isEnabled()) {
++		return false;
++	}
++	if (value < 0 || value > Core::SettingsProxy::kMaximumTimingValue) {
++		return false;
++	}
++	if (_settings.proxySlowJitter() == value) {
++		return true;
++	}
++	_settings.setProxySlowJitter(value);
++	MTP::ProxyData::setGlobalSlowJitter(value);
+ 	saveDelayed();
+ 	return true;
+ }
+ 
+ void ProxiesBoxController::setProxyForCalls(bool enabled) {
++	if (!_settings.isEnabled()) {
++		return;
++	}
+ 	if (_settings.useProxyForCalls() == enabled) {
+ 		return;
+ 	}
+@@ -2313,6 +3049,9 @@ void ProxiesBoxController::setProxyForCalls(bool enabled) {
+ }
+ 
+ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
++	if (!_settings.isEnabled()) {
++		return;
++	}
+ 	if (_settings.proxyRotationEnabled() == enabled) {
+ 		return;
+ 	}
+@@ -2321,6 +3060,9 @@ void ProxiesBoxController::setProxyRotationEnabled(bool enabled) {
+ }
+ 
+ void ProxiesBoxController::setProxyRotationTimeout(int value) {
++	if (!_settings.isEnabled()) {
++		return;
++	}
+ 	if (_settings.proxyRotationTimeout() == value) {
+ 		return;
+ 	}
+@@ -2329,15 +3071,46 @@ void ProxiesBoxController::setProxyRotationTimeout(int value) {
+ }
+ 
+ void ProxiesBoxController::setTryIPv6(bool enabled) {
+-	if (Core::App().settings().proxy().tryIPv6() == enabled) {
++	auto &settings = Core::App().settings().proxy();
++	if (settings.tryIPv6() == enabled) {
+ 		return;
+ 	}
+-	Core::App().settings().proxy().setTryIPv6(enabled);
+-	_account->mtp().restart();
++	settings.setTryIPv6(enabled);
++	if (!enabled && settings.proxyPreferIPv6()) {
++		settings.setProxyPreferIPv6(false);
++		MTP::ProxyData::setGlobalPreferIPv6(false);
++	}
++	const auto restartChecks = _checksRunning.current();
++	if (restartChecks) {
++		cancelAllChecks();
++	}
++	for (auto &proxy : settings.list()) {
++		proxy.resolvedIPs.clear();
++		proxy.resolvedExpireAt = 0;
++	}
++	for (auto &item : _list) {
++		item.data.resolvedIPs.clear();
++		item.data.resolvedExpireAt = 0;
++	}
++	auto selected = settings.selected();
++	selected.resolvedIPs.clear();
++	selected.resolvedExpireAt = 0;
++	settings.setSelected(selected);
++	Core::App().restartMtpForProxyConfigurationChange();
++	if (restartChecks) {
++		refreshAllChecks();
++	}
+ 	_settings.connectionTypeChangesNotify();
+ 	saveDelayed();
+ }
+ 
++void ProxiesBoxController::refreshSelectedView() {
++	const auto i = findByProxy(_settings.selected());
++	if (i != end(_list)) {
++		updateView(*i);
++	}
++}
++
+ void ProxiesBoxController::saveDelayed() {
+ 	Core::App().proxyRotationSettingsChanged();
+ 	_saveTimer.callOnce(kSaveSettingsDelayedTimeout);
+@@ -2359,18 +3132,60 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+ }
+ 
+ void ProxiesBoxController::updateView(const Item &item) {
++	_views.fire(viewForItem(item));
++}
++
++bool ProxiesBoxController::setProxyPreferIPv6(bool value) {
++	if (!_settings.isEnabled()) {
++		return false;
++	}
++	if (value && !_settings.tryIPv6()) {
++		return false;
++	}
++	if (_settings.proxyPreferIPv6() == value) {
++		return true;
++	}
++	_settings.setProxyPreferIPv6(value);
++	MTP::ProxyData::setGlobalPreferIPv6(value);
++	const auto restartChecks = _checksRunning.current();
++	if (restartChecks) {
++		cancelAllChecks();
++	}
++	for (auto &proxy : _settings.list()) {
++		proxy.resolvedIPs.clear();
++		proxy.resolvedExpireAt = 0;
++	}
++	for (auto &item : _list) {
++		item.data.resolvedIPs.clear();
++		item.data.resolvedExpireAt = 0;
++	}
++	auto selected = _settings.selected();
++	selected.resolvedIPs.clear();
++	selected.resolvedExpireAt = 0;
++	_settings.setSelected(selected);
++	Core::App().restartMtpForProxyConfigurationChange();
++	if (restartChecks) {
++		refreshAllChecks();
++	}
++	saveDelayed();
++	return true;
++}
++
++auto ProxiesBoxController::viewForItem(const Item &item) const -> ItemView {
+ 	const auto selected = (_settings.selected() == item.data);
+ 	const auto deleted = item.deleted;
+ 	const auto type = [&] {
+ 		switch (item.data.type) {
+ 		case Type::Http: return u"HTTP"_q;
+ 		case Type::Socks5: return u"SOCKS5"_q;
+-		case Type::Mtproto: return u"MTPROTO"_q;
++		case Type::Mtproto: return u"MTProto"_q;
+ 		}
+-		Unexpected("Proxy type in ProxiesBoxController::updateView.");
++		Unexpected("Proxy type in ProxiesBoxController::viewForItem.");
+ 	}();
+ 	const auto state = [&] {
+-		if (!selected || !_settings.isEnabled()) {
++		if (!_settings.isEnabled()) {
++			return ItemState::Inactive;
++		} else if (!selected) {
+ 			return item.state;
+ 		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
+ 			return ItemState::Online;
+@@ -2379,18 +3194,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+ 	}();
+ 	const auto supportsShare = ProxyDataIsShareable(item.data);
+ 	const auto supportsCalls = item.data.supportsCalls();
+-	_views.fire({
++	return {
+ 		item.id,
+ 		type,
+ 		item.data.host,
+ 		item.data.port,
+ 		item.ping,
+-		!deleted && selected,
++		item.checkedAt,
++		!deleted && selected && _settings.isEnabled(),
+ 		deleted,
+ 		!deleted && supportsShare,
+ 		supportsCalls,
+ 		state,
+-	});
++	};
+ }
+ 
+ void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
+diff --git a/Telegram/SourceFiles/boxes/connection_box.h b/Telegram/SourceFiles/boxes/connection_box.h
+index 5de98bc663..6fb7d92a98 100644
+--- a/Telegram/SourceFiles/boxes/connection_box.h
++++ b/Telegram/SourceFiles/boxes/connection_box.h
+@@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "base/timer.h"
+ #include "base/object_ptr.h"
+ #include "core/core_settings_proxy.h"
+-#include "mtproto/connection_abstract.h"
++#include "mtproto/proxy_check.h"
+ #include "mtproto/mtproto_proxy_data.h"
+ 
+ namespace Ui {
+@@ -20,6 +20,7 @@ class InputField;
+ class PortInput;
+ class PasswordInput;
+ class Checkbox;
++class SettingsButton;
+ template <typename Enum>
+ class RadioenumGroup;
+ template <typename Enum>
+@@ -59,7 +60,8 @@ public:
+ 		Online,
+ 		Checking,
+ 		Available,
+-		Unavailable
++		Unavailable,
++		Inactive,
+ 	};
+ 	struct ItemView {
+ 		int id = 0;
+@@ -67,11 +69,12 @@ public:
+ 		QString host;
+ 		uint32 port = 0;
+ 		int ping = 0;
++		QString checkedAt;
+ 		bool selected = false;
+ 		bool deleted = false;
+ 		bool supportsShare = false;
+ 		bool supportsCalls = false;
+-		ItemState state = ItemState::Checking;
++		ItemState state = ItemState::Inactive;
+ 
+ 	};
+ 
+@@ -84,11 +87,23 @@ public:
+ 	object_ptr<Ui::BoxContent> editItemBox(int id);
+ 	object_ptr<Ui::BoxContent> addNewItemBox();
+ 	bool setProxySettings(ProxyData::Settings value);
++	bool setProxyCHelloType(ProxyData::CHelloType value);
++	bool setProxySlowMode(bool value);
++	bool setProxySlowDelay(int value);
++	bool setProxySlowJitter(int value);
++	bool setProxyPreferIPv6(bool value);
+ 	void setProxyForCalls(bool enabled);
+ 	void setProxyRotationEnabled(bool enabled);
+ 	void setProxyRotationTimeout(int value);
+ 	void setTryIPv6(bool enabled);
++	void refreshAllChecks();
++	void refreshSelectedView();
+ 	rpl::producer<ProxyData::Settings> proxySettingsValue() const;
++	rpl::producer<bool> checksRunningValue() const;
++	rpl::producer<> checksFinished() const;
++	[[nodiscard]] std::vector<ItemView> snapshot() const;
++	[[nodiscard]] bool selectedUsesFakeTls() const;
++	[[nodiscard]] bool selectedUsesHostname() const;
+ 
+ 	[[nodiscard]] bool contains(const ProxyData &proxy) const;
+ 	void addNewItem(const ProxyData &proxy);
+@@ -100,15 +115,15 @@ public:
+ 	~ProxiesBoxController();
+ 
+ private:
+-	using Checker = MTP::details::ConnectionPointer;
+ 	struct Item {
+ 		int id = 0;
+ 		ProxyData data;
+ 		bool deleted = false;
+-		Checker checker;
+-		Checker checkerv6;
+-		ItemState state = ItemState::Checking;
++		MTP::ProxyCheckHandlePointer checker;
++		ItemState state = ItemState::Inactive;
+ 		int ping = 0;
++		QString checkedAt;
++		bool batchCheck = false;
+ 
+ 	};
+ 
+@@ -118,7 +133,14 @@ private:
+ 	void updateView(const Item &item);
+ 	void share(const ProxyData &proxy, bool qr = false);
+ 	void saveDelayed();
+-	void refreshChecker(Item &item);
++	void refreshChecker(Item &item, bool batch = false);
++	[[nodiscard]] bool cancelBatchCheck(Item &item);
++	void cancelAllChecks();
++	void checkFinished(int id, ItemState state, int ping, bool batch);
++	void finishChecksBatch();
++	[[nodiscard]] int compareEndpoints(const Item &a, const Item &b) const;
++	void sortListByEndpoint();
++	[[nodiscard]] ItemView viewForItem(const Item &item) const;
+ 
+ 	void replaceItemWith(
+ 		std::vector<Item>::iterator which,
+@@ -134,6 +156,9 @@ private:
+ 	rpl::event_stream<ItemView> _views;
+ 	base::Timer _saveTimer;
+ 	rpl::event_stream<ProxyData::Settings> _proxySettingsChanges;
++	rpl::variable<bool> _checksRunning = false;
++	rpl::event_stream<> _checksFinished;
++	int _batchChecksLeft = 0;
+ 	std::shared_ptr<Ui::Show> _show;
+ 
+ 	ProxyData _lastSelectedProxy;

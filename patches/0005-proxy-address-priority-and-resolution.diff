@@ -1,0 +1,60 @@
+diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+index 571e14eb38..a6e242556b 100644
+--- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include "mtproto/mtp_instance.h"
+ 
++#include <algorithm>
++
+ namespace MTP {
+ namespace details {
+ namespace {
+@@ -93,8 +95,16 @@ void ResolvingConnection::domainResolved(
+ 	}
+ 	_proxy.resolvedExpireAt = expireAt;
+ 
++	auto ordered = ips;
++	const auto preferIPv6 = ProxyData::globalPreferIPv6();
++	std::stable_sort(
++		ordered.begin(),
++		ordered.end(),
++		[=](const QString &a, const QString &b) {
++			return ProxyData::addressComesFirst(a, b, preferIPv6);
++		});
+ 	auto index = 0;
+-	for (const auto &ip : ips) {
++	for (const auto &ip : ordered) {
+ 		if (index >= _proxy.resolvedIPs.size()) {
+ 			_proxy.resolvedIPs.push_back(ip);
+ 		} else if (_proxy.resolvedIPs[index] != ip) {
+@@ -165,6 +175,10 @@ void ResolvingConnection::handleReceivedData() {
+ }
+ 
+ void ResolvingConnection::handleConnected() {
++	if (_ipIndex >= int(_proxy.resolvedIPs.size())) {
++		emitError(kErrorCodeOther);
++		return;
++	}
+ 	_connected = true;
+ 	_timeoutTimer.cancel();
+ 	if (_ipIndex >= 0) {
+diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+index a7dd178b71..30920d1333 100644
+--- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
++++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+@@ -409,6 +409,13 @@ void Instance::Private::applyDomainIps(
+ 		}
+ 		proxy.resolvedExpireAt = expireAt;
+ 		auto copy = ips;
++		const auto preferIPv6 = ProxyData::globalPreferIPv6();
++		std::stable_sort(
++			copy.begin(),
++			copy.end(),
++			[=](const QString &a, const QString &b) {
++				return ProxyData::addressComesFirst(a, b, preferIPv6);
++			});
+ 		auto &current = proxy.resolvedIPs;
+ 		const auto i = ranges::remove_if(current, [&](const QString &ip) {
+ 			const auto index = copy.indexOf(ip);
