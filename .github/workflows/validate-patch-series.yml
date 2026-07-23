@@ -51,6 +51,7 @@ jobs:
           python -m pip install --disable-pip-version-check pyyaml
           @'
           from pathlib import Path
+          import re
           import yaml
 
           root = Path("patch-source/.github/workflows")
@@ -65,7 +66,13 @@ jobs:
                       run = step.get("run")
                       if run and shell.startswith("pwsh"):
                           target = output / f"{workflow.stem}-{job_name}-{index}.ps1"
-                          target.write_text(str(run), encoding="utf-8")
+                          sanitized = re.sub(
+                              r"\$\{\{.*?\}\}",
+                              "GITHUB_EXPRESSION",
+                              str(run),
+                              flags=re.DOTALL,
+                          )
+                          target.write_text(sanitized, encoding="utf-8")
                           count += 1
           print(f"Extracted {count} PowerShell blocks")
           '@ | python
