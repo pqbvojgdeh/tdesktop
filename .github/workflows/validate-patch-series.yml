@@ -115,9 +115,15 @@ jobs:
           coordinator="source/Telegram/SourceFiles/mtproto/proxy_check.cpp"
 
           grep -Fq 'ResolvedIpFailureOrigin::ChildError' "$resolving"
-          ! grep -Fq '_waitingForQuarantine' "$resolving"
+          if grep -Fq '_waitingForQuarantine' "$resolving"; then
+            echo "::error::ResolvingConnection still waits inside quarantine."
+            exit 1
+          fi
           grep -Fq 'kSlowConnectOverflowMinimumDelayMs' "$tls"
-          ! grep -Fq 'Connect now instead' "$tls"
+          if grep -Fq 'Connect now instead' "$tls"; then
+            echo "::error::Slow-connect overflow still fails open."
+            exit 1
+          fi
           grep -Fq 'kProxySettingsExtensionVersion = std::int32_t(2)' "$settings"
           grep -Fq 'ProxyRotationShouldKeepWaiting' "$rotation"
           grep -Fq 'AssertProxyCheckCoordinatorThread' "$coordinator"
