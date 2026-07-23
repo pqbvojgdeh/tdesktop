@@ -213,7 +213,7 @@ jobs:
             echo "$sdk"
             echo "vs2026"
             echo "qt6"
-            echo "dependency-cache-v2"
+            echo "dependency-cache-v3"
           } > CACHE_KEY.txt
 
           cache_key="$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')"
@@ -441,6 +441,36 @@ jobs:
           restore-keys: |
             ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-
 
+      - name: Repair legacy pruned nv-codec-headers cache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $source = Join-Path $env:LibrariesPath "nv-codec-headers"
+          $makefile = Join-Path $source "Makefile"
+
+          if ((Test-Path -LiteralPath $source) -and
+              -not (Test-Path -LiteralPath $makefile)) {
+            Write-Warning @"
+          Restored nv-codec-headers has no Makefile. The old pruning policy
+          produced an incomplete source tree, so force prepare.py to rebuild it.
+          "@
+
+            $stageKey = Join-Path `
+              $env:LibrariesPath `
+              "cache_keys\nv-codec-headers"
+
+            Remove-Item `
+              -LiteralPath $source `
+              -Recurse `
+              -Force
+
+            Remove-Item `
+              -LiteralPath $stageKey `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
       - name: Prepare Telegram Desktop dependencies
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: 2
@@ -465,6 +495,7 @@ jobs:
                   -name '*.hpp' -o \
                   -name '*.inc' -o \
                   -name '*.cmake' -o \
+                  -name 'Makefile' -o \
                   -path '*/include/*' -o \
                   -path '*/objects-*' -o \
                   -path '*/cache_keys/*' -o \
