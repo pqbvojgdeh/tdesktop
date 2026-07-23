@@ -1,0 +1,253 @@
+diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.cpp b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+index c3d39db..c57a66e 100644
+--- a/Telegram/SourceFiles/mtproto/connection_resolving.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_resolving.cpp
+@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "mtproto/connection_resolving.h"
+ 
+ #include "mtproto/mtp_instance.h"
++#include "mtproto/details/mtproto_slow_connect_policy.h"
+ 
+ #include <algorithm>
+ #include <iterator>
+@@ -20,7 +21,8 @@ namespace details {
+ namespace {
+ 
+ constexpr auto kOneConnectionTimeout = crl::time(4000);
+-constexpr auto kSlowConnectMaximumWait = crl::time(7500);
++constexpr auto kSlowConnectMaximumWait = crl::time(
++	kSlowConnectMaximumAdditionalDelayMs);
+ constexpr auto kSlowConnectSchedulingMargin = crl::time(500);
+ constexpr auto kSlowOneConnectionTimeout = kOneConnectionTimeout
+ 	+ kSlowConnectMaximumWait
+@@ -144,30 +146,37 @@ void ClearIpHealth(
+ 	IpHealthMap().erase(MakeIpHealthKey(host, port, ip));
+ }
+ 
+-[[nodiscard]] int FindNextResolvedIpIndex(
++struct ResolvedIpSelection final {
++	int index = -1;
++	crl::time retryAfter = 0;
++};
++
++[[nodiscard]] ResolvedIpSelection FindNextResolvedIp(
+ 		const ProxyData &proxy,
+-		int afterIndex) {
++		int afterIndex,
++		const std::vector<QString> &attempted) {
+ 	const auto now = crl::now();
+ 	const auto lock = std::lock_guard(IpHealthMutex());
+ 	PruneIpHealth(now);
+-	auto fallback = -1;
+-	auto fallbackUntil = crl::time(0);
+-	for (auto index = afterIndex + 1;
+-		index < int(proxy.resolvedIPs.size());
+-		++index) {
++	auto retryAfter = crl::time(0);
++	const auto count = int(proxy.resolvedIPs.size());
++	for (auto offset = 1; offset <= count; ++offset) {
++		const auto index = (afterIndex + offset + count) % count;
++		const auto &ip = proxy.resolvedIPs[index];
++		if (ranges::contains(attempted, ip)) {
++			continue;
++		}
+ 		const auto i = IpHealthMap().find(MakeIpHealthKey(
+ 			proxy.host,
+ 			proxy.port,
+-			proxy.resolvedIPs[index]));
++			ip));
+ 		if (i == end(IpHealthMap()) || i->second.quarantineUntil <= now) {
+-			return index;
+-		}
+-		if (fallback < 0 || i->second.quarantineUntil < fallbackUntil) {
+-			fallback = index;
+-			fallbackUntil = i->second.quarantineUntil;
++			return { index, 0 };
+ 		}
++		const auto remaining = i->second.quarantineUntil - now;
++		retryAfter = !retryAfter ? remaining : std::min(retryAfter, remaining);
+ 	}
+-	return fallback;
++	return { -1, retryAfter };
+ }
+ 
+ } // namespace
+@@ -179,7 +188,7 @@ ResolvingConnection::ResolvingConnection(
+ 	ConnectionPointer &&child)
+ : AbstractConnection(thread, proxy)
+ , _instance(instance)
+-, _timeoutTimer([=] { handleError(kErrorCodeOther); }) {
++, _timeoutTimer([=] { timeoutExpired(); }) {
+ 	setChild(std::move(child));
+ 	if (proxy.resolvedExpireAt < crl::now()) {
+ 		const auto host = proxy.host;
+@@ -247,15 +256,14 @@ void ResolvingConnection::domainResolved(
+ 		return;
+ 	}
+ 	_proxy.resolvedExpireAt = expireAt;
+-
+-	auto ordered = ips;
+-	const auto preferIPv6 = ProxyData::globalPreferIPv6();
+-	std::stable_sort(
+-		ordered.begin(),
+-		ordered.end(),
+-		[=](const QString &a, const QString &b) {
+-			return ProxyData::addressComesFirst(a, b, preferIPv6);
+-		});
++	_attemptedResolvedIps.clear();
++	_waitingForQuarantine = false;
++
++	const auto ordered = ProxyData::orderResolvedAddresses(
++		ips,
++		_proxy.host,
++		_proxy.port,
++		ProxyData::globalPreferIPv6());
+ 	auto index = 0;
+ 	for (const auto &ip : ordered) {
+ 		if (index >= _proxy.resolvedIPs.size()) {
+@@ -298,11 +306,21 @@ bool ResolvingConnection::refreshChild() {
+ 	if (!_child) {
+ 		return true;
+ 	}
+-	const auto next = FindNextResolvedIpIndex(_proxy, _ipIndex);
+-	if (next < 0) {
++	const auto selection = FindNextResolvedIp(
++		_proxy,
++		_ipIndex,
++		_attemptedResolvedIps);
++	if (selection.index < 0) {
++		if (selection.retryAfter > 0) {
++			_waitingForQuarantine = true;
++			_timeoutTimer.callOnce(selection.retryAfter);
++			return true;
++		}
+ 		return false;
+ 	}
+-	_ipIndex = next;
++	_waitingForQuarantine = false;
++	_ipIndex = selection.index;
++	_attemptedResolvedIps.push_back(_proxy.resolvedIPs[_ipIndex]);
+ 	setChild(_child->clone(ToDirectIpProxy(_proxy, _ipIndex)));
+ 	_timeoutTimer.callOnce(OneConnectionTimeout(_proxy));
+ 	return true;
+@@ -314,6 +332,8 @@ void ResolvingConnection::emitError(int errorCode) {
+ 	_connected = false;
+ 	_connectedAt = 0;
+ 	_disconnecting = false;
++	_waitingForQuarantine = false;
++	_attemptedResolvedIps.clear();
+ 	_child = nullptr;
+ 	error(errorCode);
+ }
+@@ -323,13 +343,8 @@ void ResolvingConnection::handleError(int errorCode) {
+ 		return;
+ 	}
+ 	if (_connected) {
+-		if (_connectedAt
+-			&& (crl::now() - _connectedAt) < kEarlyDisconnectQuarantine) {
+-			quarantineCurrentIp();
+-		}
+ 		emitError(errorCode);
+ 	} else if (!_proxy.resolvedIPs.empty()) {
+-		quarantineCurrentIp();
+ 		if (!refreshChild()) {
+ 			emitError(errorCode);
+ 		}
+@@ -416,8 +431,28 @@ void ResolvingConnection::disconnectFromServer() {
+ 	_child->disconnectFromServer();
+ }
+ 
++void ResolvingConnection::timeoutExpired() {
++	if (_disconnecting || !_child) {
++		return;
++	}
++	if (_waitingForQuarantine) {
++		_waitingForQuarantine = false;
++		if (!refreshChild()) {
++			emitError(kErrorCodeOther);
++		}
++		return;
++	}
++	if (!_connected) {
++		quarantineCurrentIp();
++	}
++	handleError(kErrorCodeOther);
++}
++
+ void ResolvingConnection::timedOut() {
+ 	if (!_disconnecting && _child) {
++		if (!_connected) {
++			quarantineCurrentIp();
++		}
+ 		_child->timedOut();
+ 	}
+ }
+@@ -431,6 +466,8 @@ void ResolvingConnection::connectToServer(
+ 	_disconnecting = false;
+ 	_connected = false;
+ 	_connectedAt = 0;
++	_waitingForQuarantine = false;
++	_attemptedResolvedIps.clear();
+ 	if (!_child) {
+ 		InvokeQueued(this, [=] { emitError(kErrorCodeOther); });
+ 		return;
+diff --git a/Telegram/SourceFiles/mtproto/connection_resolving.h b/Telegram/SourceFiles/mtproto/connection_resolving.h
+index 0f8d0e8..3634dea 100644
+--- a/Telegram/SourceFiles/mtproto/connection_resolving.h
++++ b/Telegram/SourceFiles/mtproto/connection_resolving.h
+@@ -48,6 +48,7 @@
+ 	void emitError(int errorCode);
+ 	void quarantineCurrentIp();
+ 	void clearCurrentIpHealth();
++	void timeoutExpired();
+ 
+ 	void domainResolved(
+ 		const QString &host,
+@@ -62,7 +63,9 @@
+ 	ConnectionPointer _child;
+ 	bool _connected = false;
+ 	bool _disconnecting = false;
++	bool _waitingForQuarantine = false;
+ 	int _ipIndex = -1;
++	std::vector<QString> _attemptedResolvedIps;
+ 	crl::time _connectedAt = 0;
+ 	QString _address;
+ 	int _port = 0;
+diff --git a/Telegram/SourceFiles/mtproto/connection_tcp.cpp b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
+index e3d6259..7fd746f 100644
+--- a/Telegram/SourceFiles/mtproto/connection_tcp.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
+@@ -21,7 +21,8 @@ namespace {
+ 
+ constexpr auto kPacketSizeMax = int(0x01000000 * sizeof(mtpPrime));
+ constexpr auto kFullConnectionTimeout = 8 * crl::time(1000);
+-constexpr auto kSlowConnectTimeoutBudget = crl::time(8000);
++constexpr auto kSlowConnectTimeoutBudget = crl::time(
++	kSlowConnectMaximumAdditionalDelayMs);
+ constexpr auto kSmallBufferSize = 256 * 1024;
+ constexpr auto kMinPacketBuffer = 256;
+ constexpr auto kConnectionStartPrefixSize = 64;
+diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+index 1b3ce1d..a344b3d 100644
+--- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
++++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+@@ -408,14 +408,11 @@ void Instance::Private::applyDomainIps(
+ 			return false;
+ 		}
+ 		proxy.resolvedExpireAt = expireAt;
+-		auto copy = ips;
+-		const auto preferIPv6 = ProxyData::globalPreferIPv6();
+-		std::stable_sort(
+-			copy.begin(),
+-			copy.end(),
+-			[=](const QString &a, const QString &b) {
+-				return ProxyData::addressComesFirst(a, b, preferIPv6);
+-			});
++		auto copy = ProxyData::orderResolvedAddresses(
++			ips,
++			proxy.host,
++			proxy.port,
++			ProxyData::globalPreferIPv6());
+ 		auto &current = proxy.resolvedIPs;
+ 		const auto i = ranges::remove_if(current, [&](const QString &ip) {
+ 			const auto index = copy.indexOf(ip);

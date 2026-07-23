@@ -1,0 +1,55 @@
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+index 6e61170..e57e66b 100644
+--- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
++++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+@@ -11,6 +11,8 @@
+ #include "mtproto/facade.h"
+ #include "mtproto/mtproto_dc_options.h"
+ 
++#include <QtCore/QPointer>
++
+ #include <algorithm>
+ #include <optional>
+ 
+@@ -73,7 +75,7 @@ public:
+ private:
+ 	struct Entry {
+ 		uint64 id = 0;
+-		Instance *mtproto = nullptr;
++		QPointer<Instance> mtproto;
+ 		ProxyData proxy;
+ 		bool tryIPv6 = false;
+ 		bool active = false;
+@@ -119,7 +121,12 @@ private:
+ 					end(entry.listeners),
+ 					[](const auto &listener) { return listener.expired(); }),
+ 				end(entry.listeners));
+-			if (entry.listeners.empty()) {
++			if (entry.listeners.empty() || !entry.mtproto) {
++				_entries.erase(i);
++				continue;
++			}
++			const auto mtproto = entry.mtproto.data();
++			if (!mtproto) {
+ 				_entries.erase(i);
+ 				continue;
+ 			}
+@@ -129,7 +136,7 @@ private:
+ 			++_activeCount;
+ 			const auto id = entry.id;
+ 			StartProxyCheck(
+-				not_null<Instance*>(entry.mtproto),
++				not_null<Instance*>(mtproto),
+ 				entry.proxy,
+ 				entry.tryIPv6,
+ 				entry.v4,
+@@ -171,7 +178,8 @@ private:
+ 					[](const auto &listener) { return listener.expired(); }),
+ 				end(entry->listeners));
+ 			if (entry->active
+-				&& (entry->listeners.empty()
++				&& (!entry->mtproto
++					|| entry->listeners.empty()
+ 					|| (now - entry->startedAt >= kProxyCheckLifetime))) {
+ 				expired.push_back(entry->id);
+ 			}

@@ -1,0 +1,26 @@
+diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
+index 3e51338c13..a3f1c5fbc1 100644
+--- a/Telegram/SourceFiles/boxes/boxes.style
++++ b/Telegram/SourceFiles/boxes/boxes.style
+@@ -697,10 +697,21 @@ groupStickersField: InputField(defaultMultiSelectSearchField) {
+ groupStickersSubTitleHeight: 48px;
+ 
+ proxyUsePadding: margins(22px, 6px, 22px, 5px);
++proxySettingsWidth: 540px;
++proxySettingsControlLabelWidth: 160px;
++proxySettingsNumberWidth: 90px;
++proxySettingsUnitWidth: 24px;
++proxySettingsNumberInput: InputField(connectionPortInputField) {
++	textMargins: margins(0px, 17px, 0px, 4px);
++}
+ proxyTryIPv6Padding: margins(22px, 8px, 22px, 5px);
+ proxyRowPadding: margins(22px, 8px, 8px, 8px);
++proxyRowSelectedPadding: margins(6px, 2px, 6px, 2px);
++proxyRowSelectedRadius: 8px;
++proxyRowSelectedBg: windowBgOver;
+ proxyRowIconSkip: 32px;
+ proxyRowSkip: 2px;
++proxyRowStatusSkip: 8px;
+ proxyRowRipple: defaultRippleAnimationBgOver;
+ proxyRowTitleFg: windowFg;
+ proxyRowTitlePalette: TextPalette(defaultTextPalette) {

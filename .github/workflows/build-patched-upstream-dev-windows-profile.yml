@@ -192,16 +192,31 @@ jobs:
           source_dir="$(cygpath -u "$TBUILD/$REPO_NAME")"
           workspace="$(cygpath -u "$GITHUB_WORKSPACE")"
           patch_dir="$workspace/patch-source/patches"
-          patches=(
-            "$patch_dir/0001-proxy-settings-and-data-model.diff"
-            "$patch_dir/0002-mtproto-client-hello-session-and-slow-connect.diff"
-            "$patch_dir/0003-mtproto-profile-test-entrypoint.diff"
-            "$patch_dir/0004-proxy-check-coordinator-and-rotation.diff"
-            "$patch_dir/0005-proxy-address-priority-and-resolution.diff"
-            "$patch_dir/0006-proxy-settings-ui.diff"
-            "$patch_dir/0007-proxy-resolved-ip-health-and-timeouts.diff"
-            "$patch_dir/0008-main-menu-version-commit-build-tooltip.diff"
+          series_file="$patch_dir/series.txt"
+
+          if [[ ! -f "$series_file" ]]; then
+            echo "::error::Patch series file was not found: $series_file"
+            exit 1
+          fi
+
+          mapfile -t patch_names < <(
+            sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' "$series_file"
           )
+
+          if (( ${#patch_names[@]} == 0 )); then
+            echo "::error::Patch series is empty."
+            exit 1
+          fi
+
+          patches=()
+          for name in "${patch_names[@]}"; do
+            if [[ "$name" == */* || "$name" == *\\* || "$name" == .* ]]; then
+              echo "::error::Unsafe patch name in series: $name"
+              exit 1
+            fi
+            patches+=("$patch_dir/$name")
+          done
+
           for patch in "${patches[@]}"; do
             if [[ ! -f "$patch" ]]; then
               echo "::error::Patched variant file was not found: $patch"
@@ -218,6 +233,13 @@ jobs:
 
           menu_file="$source_dir/Telegram/SourceFiles/window/window_main_menu.cpp"
           helper_file="$source_dir/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
+          if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+            build_time_utc="$(
+              TZ=UTC date -d "@$SOURCE_DATE_EPOCH" '+%Y-%m-%d %H:%M:%S UTC'
+            )"
+          else
+            build_time_utc="$(TZ=UTC date '+%Y-%m-%d %H:%M:%S UTC')"
+          fi
           source_commit_time_utc="$(
             TZ=UTC git -C "$source_dir" show -s \
               --format=%cd \
@@ -245,10 +267,11 @@ jobs:
 
           sed -i \
             -e "s|__TDESKTOP_COMMIT_TIME_UTC__|$source_commit_time_utc|g" \
+            -e "s|__TDESKTOP_BUILD_TIME_UTC__|$build_time_utc|g" \
             "$helper_file"
 
-          if grep -Fq "__TDESKTOP_COMMIT_" "$menu_file" "$helper_file"; then
-            echo "::error::Commit placeholders remain after substitution."
+          if grep -Eq "__TDESKTOP_(COMMIT|BUILD)_" "$menu_file" "$helper_file"; then
+            echo "::error::Source/build metadata placeholders remain after substitution."
             exit 1
           fi
 
@@ -259,6 +282,27 @@ jobs:
 
           grep -Fq "u\"$SOURCE_SHORT_SHA\"_q" "$menu_file"
           grep -Fq "Commit: $source_commit_time_utc" "$helper_file"
+          grep -Fq "Build: $build_time_utc" "$helper_file"
+
+          resolving="$source_dir/Telegram/SourceFiles/mtproto/connection_resolving.cpp"
+          tls_socket="$source_dir/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
+          settings_policy="$source_dir/Telegram/SourceFiles/core/proxy_settings_extension_policy.h"
+          rotation_policy="$source_dir/Telegram/SourceFiles/core/proxy_rotation_policy.h"
+          proxy_check="$source_dir/Telegram/SourceFiles/mtproto/proxy_check.cpp"
+
+          grep -Fq "ResolvedIpFailureOrigin::ChildError" "$resolving"
+          if grep -Fq "_waitingForQuarantine" "$resolving"; then
+            echo "::error::ResolvingConnection still waits inside quarantine."
+            exit 1
+          fi
+          grep -Fq "kSlowConnectOverflowMinimumDelayMs" "$tls_socket"
+          if grep -Fq "Connect now instead" "$tls_socket"; then
+            echo "::error::Slow-connect overflow still fails open into a burst."
+            exit 1
+          fi
+          grep -Fq "kProxySettingsExtensionVersion = std::int32_t(2)" "$settings_policy"
+          grep -Fq "ProxyRotationShouldKeepWaiting" "$rotation_policy"
+          grep -Fq "AssertProxyCheckCoordinatorThread" "$proxy_check"
 
           echo "Patched variant changes applied to $SOURCE_SHA."
 
@@ -397,8 +441,13 @@ jobs:
 
           $sourceDir = Join-Path $env:TBUILD $env:REPO_NAME
           $tests = @(
-            "chromium150_ticket_cache_test.cpp",
-            "client_hello_validation_test.cpp"
+            "chromium_resumption_cache_test.cpp",
+            "client_hello_validation_test.cpp",
+            "slow_connect_policy_test.cpp",
+            "resolved_ip_policy_test.cpp",
+            "proxy_settings_extension_test.cpp",
+            "proxy_check_coordinator_policy_test.cpp",
+            "proxy_rotation_policy_test.cpp"
           )
 
           foreach ($test in $tests) {
@@ -677,6 +726,9 @@ jobs:
           set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF"
           if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2"
           set "MTPROTO_TEST_FLAGS="
+          rem Test code is enabled only for the first verification link.
+          rem The same build tree is then reconfigured with the option OFF
+          rem and relinked before packaging.
           if /I "%BUILD_VARIANT%"=="patched" set "MTPROTO_TEST_FLAGS=-D DESKTOP_APP_MTPROTO_PROFILE_TESTS=ON"
 
           rem Temporary CMake 4.4 compatibility; remove after upstream handles CMP0218.
@@ -719,12 +771,6 @@ jobs:
 
           if errorlevel 1 exit /b 1
 
-          if /I "%BUILD_VARIANT%"=="patched" (
-            for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC', [Globalization.CultureInfo]::InvariantCulture)"`) do set "SOURCE_BUILD_TIME_UTC=%%i"
-            powershell -NoProfile -Command "$p = Join-Path $env:TBUILD '%REPO_NAME%\Telegram\SourceFiles\window\window_main_menu_helpers.cpp'; $text = [IO.File]::ReadAllText($p); if (-not $text.Contains('__TDESKTOP_BUILD_TIME_UTC__')) { throw 'Build time placeholder was not found.' }; $text = $text.Replace('__TDESKTOP_BUILD_TIME_UTC__', $env:SOURCE_BUILD_TIME_UTC); $encoding = New-Object System.Text.UTF8Encoding $false; [IO.File]::WriteAllText($p, $text, $encoding)"
-            if errorlevel 1 exit /b 1
-          )
-
           rem Compile every translation unit changed by the patch first. This
           rem exposes patch-specific type errors before the full Telegram target,
           rem while the resulting objects and PCH files remain reusable below.
@@ -753,6 +799,24 @@ jobs:
             ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
               Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/proxy_check.cpp.obj
             if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/application.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_tcp.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/session_private.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu_helpers.cpp.obj
+            if errorlevel 1 exit /b 1
+            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/main.cpp.obj
+            if errorlevel 1 exit /b 1
           )
 
           cmake --build ..\out ^
@@ -763,6 +827,23 @@ jobs:
 
           if /I "%BUILD_VARIANT%"=="patched" (
             ..\out\Release\Telegram.exe --validate-mtproto-client-hello
+            if errorlevel 1 exit /b 1
+
+            rem Remove the conditional test entrypoint from the distributed EXE.
+            cmake -S . -B ..\out -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF
+            if errorlevel 1 exit /b 1
+
+            cmake --build ..\out ^
+              --config Release ^
+              --target Telegram ^
+              --parallel %BUILD_PARALLEL%
+            if errorlevel 1 exit /b 1
+
+            powershell -NoProfile -Command ^
+              "$p='..\out\Release\Telegram.exe';" ^
+              "$s=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($p));" ^
+              "if($s.Contains('--validate-mtproto-client-hello')){" ^
+              "Write-Error 'Test entrypoint remains in packaged Telegram.exe'; exit 1 }"
             if errorlevel 1 exit /b 1
           )
 

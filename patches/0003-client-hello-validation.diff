@@ -1,0 +1,201 @@
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
+new file mode 100644
+index 0000000000..de5a1c7fd6
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
+@@ -0,0 +1,195 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <span>
++
++namespace MTP::details {
++
++struct ClientHelloValidation {
++	bool valid = false;
++	bool resumed = false;
++	bool hasKeyShare = false;
++	bool hasP256KeyShare = false;
++};
++
++[[nodiscard]] inline ClientHelloValidation ValidateClientHello(
++		std::span<const std::byte> data,
++		int expectResumed) {
++	const auto byte = [&](std::size_t offset) -> std::size_t {
++		return std::to_integer<std::uint8_t>(data[offset]);
++	};
++	const auto u16 = [&](std::size_t offset) -> std::size_t {
++		return (byte(offset) << 8) | byte(offset + 1);
++	};
++	const auto u24 = [&](std::size_t offset) -> std::size_t {
++		return (byte(offset) << 16)
++			| (byte(offset + 1) << 8)
++			| byte(offset + 2);
++	};
++	const auto available = [&](std::size_t offset, std::size_t length) {
++		return offset <= data.size() && length <= data.size() - offset;
++	};
++	const auto grease = [](std::size_t value) {
++		return ((value >> 8) == (value & 0xFF))
++			&& ((value & 0x0F) == 0x0A);
++	};
++
++	auto result = ClientHelloValidation();
++	if (!available(0, 9)
++		|| byte(0) != 0x16
++		|| byte(1) != 0x03
++		|| byte(2) != 0x01
++		|| u16(3) != data.size() - 5
++		|| byte(5) != 0x01
++		|| u24(6) != data.size() - 9) {
++		return result;
++	}
++
++	auto offset = std::size_t(9);
++	if (!available(offset, 35)) {
++		return result;
++	}
++	offset += 34;
++	const auto sessionIdLength = byte(offset++);
++	if (!available(offset, sessionIdLength + 2)) {
++		return result;
++	}
++	offset += sessionIdLength;
++	const auto cipherLength = std::size_t(u16(offset));
++	offset += 2;
++	if (!cipherLength || (cipherLength % 2) || !available(offset, cipherLength + 1)) {
++		return result;
++	}
++	offset += cipherLength;
++	const auto compressionLength = byte(offset++);
++	if (!compressionLength || !available(offset, compressionLength + 2)) {
++		return result;
++	}
++	offset += compressionLength;
++	const auto extensionsLength = std::size_t(u16(offset));
++	offset += 2;
++	if (!available(offset, extensionsLength) || offset + extensionsLength != data.size()) {
++		return result;
++	}
++
++	const auto extensionsEnd = offset + extensionsLength;
++	auto sawKeyShare = false;
++	auto sawPsk = false;
++	auto sawPskModes = false;
++	while (offset < extensionsEnd) {
++		if (!available(offset, 4)) {
++			return result;
++		}
++		const auto type = u16(offset);
++		const auto length = std::size_t(u16(offset + 2));
++		offset += 4;
++		if (!available(offset, length) || offset + length > extensionsEnd) {
++			return result;
++		}
++		const auto extensionEnd = offset + length;
++		if (type == 0x0033) {
++			if (sawKeyShare || length < 2 || u16(offset) != length - 2) {
++				return result;
++			}
++			sawKeyShare = true;
++			auto share = offset + 2;
++			auto shareCount = 0;
++			while (share < extensionEnd) {
++				if (share + 4 > extensionEnd) {
++					return result;
++				}
++				const auto group = u16(share);
++				const auto shareLength = std::size_t(u16(share + 2));
++				share += 4;
++				if (!shareLength || share + shareLength > extensionEnd) {
++					return result;
++				}
++				if ((group == 0x001D && shareLength != 32)
++					|| (group == 0x11EC && shareLength != 1216)
++					|| (group == 0x0017
++						&& (shareLength != 65 || byte(share) != 0x04))
++					|| (!grease(group)
++						&& group != 0x001D
++						&& group != 0x11EC
++						&& group != 0x0017)) {
++					return result;
++				}
++				result.hasP256KeyShare |= (group == 0x0017);
++				share += shareLength;
++				++shareCount;
++			}
++			if (!shareCount) {
++				return result;
++			}
++			result.hasKeyShare = true;
++		} else if (type == 0x002D) {
++			if (sawPskModes
++				|| length < 2
++				|| byte(offset) != length - 1) {
++				return result;
++			}
++			sawPskModes = true;
++			auto supportsDhe = false;
++			for (auto i = offset + 1; i != extensionEnd; ++i) {
++				supportsDhe |= (byte(i) == 0x01);
++			}
++			if (!supportsDhe) {
++				return result;
++			}
++		} else if (type == 0x0029) {
++			if (sawPsk
++				|| extensionEnd != extensionsEnd
++				|| length < 7) {
++				return result;
++			}
++			sawPsk = true;
++			auto item = offset;
++			auto identityCount = 0;
++			const auto identitiesLength = std::size_t(u16(item));
++			item += 2;
++			const auto identitiesEnd = item + identitiesLength;
++			if (identitiesLength < 6 || identitiesEnd + 2 > extensionEnd) {
++				return result;
++			}
++			while (item < identitiesEnd) {
++				if (item + 2 > identitiesEnd) {
++					return result;
++				}
++				const auto identityLength = std::size_t(u16(item));
++				item += 2;
++				if (!identityLength || item + identityLength + 4 > identitiesEnd) {
++					return result;
++				}
++				item += identityLength + 4;
++				++identityCount;
++			}
++			const auto bindersLength = std::size_t(u16(item));
++			item += 2;
++			if (!bindersLength || item + bindersLength != extensionEnd) {
++				return result;
++			}
++			const auto bindersEnd = extensionEnd;
++			auto binderCount = 0;
++			while (item < bindersEnd) {
++				const auto binderLength = byte(item++);
++				if (!binderLength || item + binderLength > bindersEnd) {
++					return result;
++				}
++				item += binderLength;
++				++binderCount;
++			}
++			if (identityCount != binderCount) {
++				return result;
++			}
++			result.resumed = true;
++		}
++		offset = extensionEnd;
++	}
++	result.valid = result.hasKeyShare
++		&& (!result.resumed || sawPskModes)
++		&& (expectResumed < 0 || result.resumed == bool(expectResumed));
++	return result;
++}
++
++} // namespace MTP::details

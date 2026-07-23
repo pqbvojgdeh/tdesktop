@@ -1,0 +1,142 @@
+name: Validate MTProto patch series
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - mtproto-patches
+    paths:
+      - patches/**
+      - .github/workflows/**
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout patch repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          path: patch-source
+          fetch-depth: 1
+
+      - name: Checkout current official dev
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: telegramdesktop/tdesktop
+          ref: dev
+          path: source
+          fetch-depth: 1
+          submodules: false
+
+      - name: Validate workflows with actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD/patch-source:/repo" \
+            -w /repo \
+            rhysd/actionlint:1.7.7
+
+      - name: Parse embedded PowerShell blocks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check pyyaml
+          @'
+          from pathlib import Path
+          import yaml
+
+          root = Path("patch-source/.github/workflows")
+          output = Path("pwsh-blocks")
+          output.mkdir(exist_ok=True)
+          count = 0
+          for workflow in root.glob("*.yml"):
+              data = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+              for job_name, job in (data.get("jobs") or {}).items():
+                  for index, step in enumerate(job.get("steps") or []):
+                      shell = str(step.get("shell", "")).lower()
+                      run = step.get("run")
+                      if run and shell.startswith("pwsh"):
+                          target = output / f"{workflow.stem}-{job_name}-{index}.ps1"
+                          target.write_text(str(run), encoding="utf-8")
+                          count += 1
+          print(f"Extracted {count} PowerShell blocks")
+          '@ | python
+
+          Get-ChildItem pwsh-blocks -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | Format-List | Out-String | Write-Error
+              throw "PowerShell syntax error in $($_.Name)"
+            }
+          }
+
+      - name: Apply complete series to current dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_dir="$PWD/patch-source/patches"
+          source_dir="$PWD/source"
+          mapfile -t patches < <(
+            sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' \
+              "$patch_dir/series.txt"
+          )
+          test "${#patches[@]}" -gt 0
+          for name in "${patches[@]}"; do
+            test "$name" = "$(basename "$name")"
+            test -f "$patch_dir/$name"
+            echo "Applying $name"
+            git -C "$source_dir" apply --check "$patch_dir/$name"
+            git -C "$source_dir" apply "$patch_dir/$name"
+          done
+          git -C "$source_dir" diff --check
+
+      - name: Verify hardening contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolving="source/Telegram/SourceFiles/mtproto/connection_resolving.cpp"
+          tls="source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
+          settings="source/Telegram/SourceFiles/core/proxy_settings_extension_policy.h"
+          rotation="source/Telegram/SourceFiles/core/proxy_rotation_policy.h"
+          coordinator="source/Telegram/SourceFiles/mtproto/proxy_check.cpp"
+
+          grep -Fq 'ResolvedIpFailureOrigin::ChildError' "$resolving"
+          ! grep -Fq '_waitingForQuarantine' "$resolving"
+          grep -Fq 'kSlowConnectOverflowMinimumDelayMs' "$tls"
+          ! grep -Fq 'Connect now instead' "$tls"
+          grep -Fq 'kProxySettingsExtensionVersion = std::int32_t(2)' "$settings"
+          grep -Fq 'ProxyRotationShouldKeepWaiting' "$rotation"
+          grep -Fq 'AssertProxyCheckCoordinatorThread' "$coordinator"
+
+      - name: Compile and run production policy tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-bin
+          for source_file in patch-source/patches/tests/*.cpp; do
+            name="$(basename "${source_file%.cpp}")"
+            g++ \
+              -std=c++20 \
+              -Wall \
+              -Wextra \
+              -Werror \
+              -pthread \
+              -Isource/Telegram/SourceFiles \
+              "$source_file" \
+              -o "test-bin/$name"
+            "test-bin/$name"
+          done

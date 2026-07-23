@@ -1,0 +1,180 @@
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h b/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h
+new file mode 100644
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h
+@@ -0,0 +1,50 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <algorithm>
++
++namespace MTP::details {
++
++class ProxyCheckCoordinatorState final {
++public:
++	[[nodiscard]] constexpr bool canStart(int maximum) const {
++		return maximum > 0 && _active < maximum;
++	}
++
++	[[nodiscard]] constexpr bool start(int maximum) {
++		if (!canStart(maximum)) {
++			return false;
++		}
++		++_active;
++		return true;
++	}
++
++	[[nodiscard]] constexpr bool finish(bool wasActive) {
++		if (!wasActive) {
++			return true;
++		} else if (_active <= 0) {
++			return false;
++		}
++		--_active;
++		return true;
++	}
++
++	[[nodiscard]] constexpr int active() const {
++		return _active;
++	}
++
++	[[nodiscard]] constexpr bool valid() const {
++		return _active >= 0;
++	}
++
++private:
++	int _active = 0;
++};
++
++} // namespace MTP::details
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+--- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
++++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+@@ -8,5 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "mtproto/proxy_check.h"
++#include "mtproto/details/mtproto_proxy_check_coordinator_policy.h"
+ 
+ #include "base/timer.h"
+ #include "mtproto/facade.h"
+@@ -115,5 +116,5 @@ private:
+ 	void startQueued() {
+ 		AssertProxyCheckCoordinatorThread();
+-		while (_activeCount < kMaxConcurrentProxyChecks) {
++		while (_state.canStart(kMaxConcurrentProxyChecks)) {
+ 			const auto i = ranges::find(
+ 				_entries,
+@@ -139,6 +140,6 @@ private:
+ 			entry.active = true;
+ 			entry.starting = true;
+ 			entry.startedAt = crl::now();
+-			++_activeCount;
++			Expects(_state.start(kMaxConcurrentProxyChecks));
+ 			const auto id = entry.id;
+ 			StartProxyCheck(
+@@ -168,6 +169,6 @@ private:
+ 	}
+ 
+ 	void armTimer() {
+-		if (_activeCount > 0 && !_timer.isActive()) {
++		if (_state.active() > 0 && !_timer.isActive()) {
+ 			_timer.callOnce(kProxyCheckTimerInterval);
+ 		}
+@@ -244,8 +245,5 @@ private:
+ 			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
+ 		_entries.erase(i);
+-		if (wasActive) {
+-			Expects(_activeCount > 0);
+-			--_activeCount;
+-		}
+-		Expects(_activeCount >= 0);
++		Expects(_state.finish(wasActive));
++		Expects(_state.valid());
+ 		for (const auto &weak : listeners) {
+@@ -272,7 +270,7 @@ private:
+ 	}
+ 
+ 	uint64 _idCounter = 0;
+-	int _activeCount = 0;
++	details::ProxyCheckCoordinatorState _state;
+ 	std::vector<std::unique_ptr<Entry>> _entries;
+ 	base::Timer _timer;
+ 	base::Timer _queueTimer;
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
+--- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
+@@ -1760,34 +1760,59 @@ ClientHello Generator::take() {
+ } // namespace
+ 
+ bool ValidateClientHelloProfilesForTests() {
+ 	if (!ValidateSlowConnectReservationForTests()) {
+ 		return false;
+ 	}
+ 	const auto domain = QByteArray("example.com");
+ 	const auto key = bytes::vector(16, bytes::type(0x42));
+-	const auto check = [&](const MTPTlsClientHello &rules,
++	const auto check = [&](const MTPTlsClientHello &rules,
+ 			int expectedResumed,
+-			bool expectedP256) {
++			bool expectedP256,
++			QByteArray *sample = nullptr) {
+ 		const auto hello = Generator(
+ 			rules,
+ 			bytes::make_span(domain),
+ 			bytes::make_span(key)).take();
+ 		if (hello.data.isEmpty() || hello.digest.size() != kHelloDigestLength) {
+ 			return false;
+ 		}
++		if (sample) {
++			*sample = hello.data;
++		}
+ 		const auto validation = ValidateClientHello(
+ 			std::span<const std::byte>(
+ 				reinterpret_cast<const std::byte*>(hello.data.constData()),
+ 				std::size_t(hello.data.size())),
+ 			expectedResumed);
+ 		return validation.valid
+ 			&& validation.hasP256KeyShare == expectedP256;
+ 	};
+-	return check(PrepareClientHelloRules_Chrome(), 0, false)
+-		&& check(PrepareClientHelloRules_Firefox(), 0, true)
+-		&& check(PrepareClientHelloRules_Firefox(true), 0, true)
+-		&& check(PrepareClientHelloRules_SafariMac(), 0, false)
+-		&& check(PrepareClientHelloRules_YandexGost(), 1, false)
+-		&& check(PrepareClientHelloRules_Chromium150(false), 0, false)
+-		&& check(PrepareClientHelloRules_Chromium150(true), 1, false);
++	for (auto iteration = 0; iteration != 256; ++iteration) {
++		if (!check(PrepareClientHelloRules_Chrome(), 0, false)
++			|| !check(PrepareClientHelloRules_Firefox(), 0, true)
++			|| !check(PrepareClientHelloRules_Firefox(true), 0, true)
++			|| !check(PrepareClientHelloRules_SafariMac(), 0, false)
++			|| !check(PrepareClientHelloRules_YandexGost(), 1, false)
++			|| !check(PrepareClientHelloRules_Chromium150(false), 0, false)
++			|| !check(PrepareClientHelloRules_Chromium150(true), 1, false)) {
++			return false;
++		}
++	}
++	auto sample = QByteArray();
++	if (!check(PrepareClientHelloRules_Chromium150(true), 1, false, &sample)) {
++		return false;
++	}
++	// Deterministic mutation sweep: the validator may accept a mutation that
++	// touches random padding, but every mutation must be handled safely.
++	const auto mutationCount = std::min(int(sample.size()), 512);
++	for (auto i = 0; i != mutationCount; ++i) {
++		auto mutated = sample;
++		mutated[i] = char(uchar(mutated[i]) ^ uchar(0x5A));
++		(void)ValidateClientHello(
++			std::span<const std::byte>(
++				reinterpret_cast<const std::byte*>(mutated.constData()),
++				std::size_t(mutated.size())),
++			1);
++	}
++	return true;
+ }
