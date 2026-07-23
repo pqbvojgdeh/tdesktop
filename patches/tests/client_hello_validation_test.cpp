@@ -9,8 +9,17 @@
 namespace {
 using Bytes = std::vector<std::byte>;
 void b(Bytes &v, std::uint8_t x) { v.push_back(std::byte(x)); }
-void u16(Bytes &v, std::size_t x) { b(v, x >> 8); b(v, x); }
-void u24(Bytes &v, std::size_t x) { b(v, x >> 16); b(v, x >> 8); b(v, x); }
+void u16(Bytes &v, std::size_t x) {
+	assert(x <= std::size_t{ 0xFFFF });
+	b(v, static_cast<std::uint8_t>((x >> 8) & 0xFF));
+	b(v, static_cast<std::uint8_t>(x & 0xFF));
+}
+void u24(Bytes &v, std::size_t x) {
+	assert(x <= std::size_t{ 0xFFFFFF });
+	b(v, static_cast<std::uint8_t>((x >> 16) & 0xFF));
+	b(v, static_cast<std::uint8_t>((x >> 8) & 0xFF));
+	b(v, static_cast<std::uint8_t>(x & 0xFF));
+}
 void extension(Bytes &v, std::uint16_t type, const Bytes &data) {
 	u16(v, type); u16(v, data.size()); v.insert(v.end(), data.begin(), data.end());
 }
