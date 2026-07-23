@@ -718,7 +718,6 @@ jobs:
           ARCHIVE_PATH: ${{ steps.metadata.outputs.archive_path }}
           CHECKSUM_PATH: ${{ steps.metadata.outputs.checksum_path }}
         run: |
-          # shellcheck disable=SC2016
           # The jq and printf format strings below are intentionally literal.
           set -euo pipefail
 
@@ -762,7 +761,9 @@ jobs:
           {
             printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
             printf '\n'
+            # shellcheck disable=SC2016
             printf '**Vanilla:** `tdesktop-vanilla.%s.7z` — official upstream dev without patches  \n' "$SHORT_SHA"
+            # shellcheck disable=SC2016
             printf '**Patched:** `tdesktop-patched.%s.7z` — with the MTProto ClientHello patch\n' "$SHORT_SHA"
             printf '\n'
             if [[ -n "$vanilla_duration" && -n "$patched_duration" ]]; then
