@@ -213,7 +213,7 @@ jobs:
             echo "$sdk"
             echo "vs2026"
             echo "qt6"
-            echo "dependency-cache-v3"
+            echo "dependency-cache-v4"
           } > CACHE_KEY.txt
 
           cache_key="$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')"
@@ -441,34 +441,74 @@ jobs:
           restore-keys: |
             ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-
 
-      - name: Repair legacy pruned nv-codec-headers cache
+      - name: Repair legacy pruned dependency cache
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $source = Join-Path $env:LibrariesPath "nv-codec-headers"
-          $makefile = Join-Path $source "Makefile"
+          $stageKeyDirectory = Join-Path `
+            $env:LibrariesPath `
+            "cache_keys"
 
-          if ((Test-Path -LiteralPath $source) -and
-              -not (Test-Path -LiteralPath $makefile)) {
-            Write-Warning @"
-          Restored nv-codec-headers has no Makefile. The old pruning policy
-          produced an incomplete source tree, so force prepare.py to rebuild it.
-          "@
-
-            $stageKey = Join-Path `
-              $env:LibrariesPath `
-              "cache_keys\nv-codec-headers"
+          function Reset-PreparedStage([string] $name) {
+            $source = Join-Path $env:LibrariesPath $name
+            $stageKey = Join-Path $stageKeyDirectory $name
 
             Remove-Item `
               -LiteralPath $source `
               -Recurse `
-              -Force
+              -Force `
+              -ErrorAction SilentlyContinue
 
             Remove-Item `
               -LiteralPath $stageKey `
               -Force `
               -ErrorAction SilentlyContinue
+          }
+
+          $nvCodecSource = Join-Path `
+            $env:LibrariesPath `
+            "nv-codec-headers"
+
+          $nvCodecMakefile = Join-Path `
+            $nvCodecSource `
+            "Makefile"
+
+          if ((Test-Path -LiteralPath $nvCodecSource) -and
+              -not (Test-Path -LiteralPath $nvCodecMakefile)) {
+            Write-Warning @"
+          Restored nv-codec-headers has no Makefile. The old pruning policy
+          produced an incomplete source tree, so force prepare.py to rebuild it.
+          "@
+
+            Reset-PreparedStage "nv-codec-headers"
+          }
+
+          $pkgConfigDirectory = Join-Path `
+            $env:LibrariesPath `
+            "local\lib\pkgconfig"
+
+          $pkgConfigRequirements = @(
+            @{ Stage = "dav1d"; File = "dav1d.pc" },
+            @{ Stage = "openh264"; File = "openh264.pc" },
+            @{ Stage = "opus"; File = "opus.pc" },
+            @{ Stage = "libvpx"; File = "vpx.pc" }
+          )
+
+          foreach ($requirement in $pkgConfigRequirements) {
+            $artifact = Join-Path `
+              $pkgConfigDirectory `
+              $requirement.File
+
+            if (-not (Test-Path -LiteralPath $artifact)) {
+              Write-Warning @"
+          Restored $($requirement.Stage) has no $($requirement.File). The old
+          pruning policy removed pkg-config metadata required by FFmpeg, so
+          force prepare.py to rebuild this stage.
+          "@
+
+              Reset-PreparedStage $requirement.Stage
+            }
           }
 
       - name: Prepare Telegram Desktop dependencies
@@ -496,6 +536,8 @@ jobs:
                   -name '*.inc' -o \
                   -name '*.cmake' -o \
                   -name 'Makefile' -o \
+                  -name '*.pc' -o \
+                  -name '*.pc.in' -o \
                   -path '*/include/*' -o \
                   -path '*/objects-*' -o \
                   -path '*/cache_keys/*' -o \
