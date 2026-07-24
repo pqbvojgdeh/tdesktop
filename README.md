@@ -1,41 +1,49 @@
 # Telegram Desktop MTProto patches
 
-Эта ветка содержит последовательную серию патчей для актуальной ветки
-`telegramdesktop/tdesktop:dev`. Основные направления: профили TLS ClientHello,
-устойчивое подключение через MTProto FakeTLS-прокси, проверка и автоматическое
-переключение прокси, расширенные настройки и связанный с ними интерфейс.
+Это экспериментальная серия патчей для актуальной ветки
+`telegramdesktop/tdesktop:dev`. Она учит MTProto FakeTLS использовать
+ClientHello, похожие на популярные браузеры, аккуратнее переподключаться через
+несколько IP-адресов, проверять прокси без лишнего сетевого всплеска и
+автоматически выбирать более стабильный сервер. Управление этими функциями
+добавлено в обычное окно настроек прокси Telegram Desktop.
+
+Патчи сгенерированы **OpenAI Codex** и **Anthropic Claude**, затем несколько раз
+проверены и доработаны по результатам построчных аудитов. Это не официальный
+набор патчей Telegram Desktop.
 
 Порядок применения зафиксирован в [`patches/series.txt`](patches/series.txt).
+Патчи зависят друг от друга: применять их нужно строго по порядку, потому что
+поздние патчи исправляют и усиливают код из предыдущих.
 
 | № | Патч | Назначение |
 |---:|---|---|
-| 1 | [`0001`](patches/0001-proxy-settings-and-data-model.diff) | Добавляет модель расширенных настроек прокси и необходимые поля `ProxyData`: ClientHello, slow-connect, IPv6 и автопереключение. |
-| 2 | [`0002`](patches/0002-chromium-synthetic-resumption-cache.diff) | Добавляет ограниченный по времени кэш синтетического Chromium TLS resumption. |
-| 3 | [`0003`](patches/0003-client-hello-validation.diff) | Добавляет структурную проверку сформированного TLS ClientHello и его расширений. |
-| 4 | [`0004`](patches/0004-client-hello-profiles-and-slow-scheduler.diff) | Реализует профили Chrome, Firefox, Safari, Yandex и Chromium, а также планировщик задержанных подключений. |
-| 5 | [`0005`](patches/0005-mtproto-profile-test-entrypoint-test-build-only.diff) | Добавляет build-only точку входа для запуска встроенных тестов ClientHello. |
-| 6 | [`0006`](patches/0006-proxy-check-coordinator-and-rotation.diff) | Добавляет общий координатор проверок прокси и базовый механизм автоматической ротации. |
-| 7 | [`0007`](patches/0007-proxy-address-priority-and-resolution.diff) | Добавляет выбор приоритета IPv4/IPv6 и применяет его при разрешении адресов прокси. |
-| 8 | [`0008`](patches/0008-proxy-ui-style.diff) | Добавляет стили для расширенного интерфейса настроек прокси. |
-| 9 | [`0009`](patches/0009-proxy-ui-implementation.diff) | Реализует расширенный UI: профили ClientHello, slow-connect, проверки и ротацию прокси. |
-| 10 | [`0010`](patches/0010-proxy-ui-model.diff) | Расширяет модель и контроллер списка прокси для нового интерфейса. |
-| 11 | [`0011`](patches/0011-proxy-resolved-ip-health-and-timeouts.diff) | Добавляет учёт состояния разрешённых IP, карантин неудачных адресов и таймауты подключения. |
-| 12 | [`0012`](patches/0012-main-menu-version-commit-build-tooltip.diff) | Показывает в главном меню версию, commit и сведения о сборке. |
-| 13 | [`0013`](patches/0013-settings-versioning-slow-policy-and-resumption-terminology.diff) | Версионирует расширение настроек, выносит slow-connect policy и уточняет lifecycle Chromium resumption. |
-| 14 | [`0014`](patches/0014-proxy-check-instance-lifetime.diff) | Защищает проверки прокси от уничтожения связанного MTProto `Instance`. |
-| 15 | [`0015`](patches/0015-resolved-ip-round-robin-and-quarantine.diff) | Добавляет round-robin разрешённых IP и корректный переход между адресами с учётом карантина. |
-| 16 | [`0016`](patches/0016-proxy-ui-global-and-offline-configuration.diff) | Делает глобальные параметры доступными при отключённом прокси и убирает лишнее постоянное обновление UI. |
-| 17 | [`0017`](patches/0017-resolved-ip-failure-classification-and-backoff.diff) | Классифицирует ошибки resolved IP и переносит ожидание карантина в управляемый backoff. |
-| 18 | [`0018`](patches/0018-slow-connect-overflow-and-slot-hardening.diff) | Защищает slow-connect scheduler от переполнений, потери слотов и TCP-burst. |
-| 19 | [`0019`](patches/0019-proxy-settings-length-prefixed-extension.diff) | Переводит расширение настроек на length-prefixed формат версии 2 с безопасным пропуском неизвестных данных. |
-| 20 | [`0020`](patches/0020-proxy-check-threading-and-adaptive-autoswitch.diff) | Фиксирует thread-affinity координатора и добавляет адаптивный алгоритм автопереключения. |
-| 21 | [`0021`](patches/0021-production-policy-tests-and-clienthello-stress.diff) | Добавляет production-policy тесты и усиленный stress-test генерации ClientHello. |
-| 22 | [`0022`](patches/0022-test-harness-and-settings-deserialization-hardening.diff) | Усиливает тестовый harness и обработку повреждённых или несовместимых расширений настроек. |
-| 23 | [`0023`](patches/0023-ui-localization-and-clienthello-validation-hardening.diff) | Локализует новый UI, усиливает проверку ClientHello и отображение build metadata. |
-| 24 | [`0024`](patches/0024-clienthello-selection-and-profile-lifecycle-hardening.diff) | Делает случайный профиль стабильным в рамках сессии и уточняет lifecycle профилей и resumption. |
-| 25 | [`0025`](patches/0025-faketls-classification-and-build-metadata-hardening.diff) | Унифицирует распознавание FakeTLS и безопасно встраивает commit/build/Qt metadata. |
-| 26 | [`0026`](patches/0026-proxy-rotation-scoring-and-timeout-budget-hardening.diff) | Оценивает прокси по сглаженному ping, разбросу, отказам и свежести; ограничивает общий timeout budget. |
-| 27 | [`0027`](patches/0027-proxy-check-lifecycle-and-ui-localization-hardening.diff) | Защищает batch-проверки от синхронных callbacks, сохраняет порядок строк и исправляет локализацию/доступность UI. |
+| 1 | [`0001`](patches/0001-proxy-settings-and-data-model.diff) | Сохраняет новые параметры прокси: выбранный браузерный ClientHello, задержку повторных соединений, приоритет IPv6 и правила автопереключения. Передаёт эти параметры в MTProto. |
+| 2 | [`0002`](patches/0002-chromium-synthetic-resumption-cache.diff) | Хранит для Chromium 150 короткоживущее состояние TLS resumption отдельно для каждого прокси. Просроченные и старые записи автоматически удаляются. |
+| 3 | [`0003`](patches/0003-client-hello-validation.diff) | Перед отправкой проверяет длины полей и список расширений ClientHello. Повреждённый или обрезанный пакет не уходит в сеть. |
+| 4 | [`0004`](patches/0004-client-hello-profiles-and-slow-scheduler.diff) | Формирует ClientHello по профилям Chrome, Firefox, Safari, Yandex и Chromium. Здесь же появляется управляемая задержка повторных соединений вместо немедленного TCP-всплеска. |
+| 5 | [`0005`](patches/0005-mtproto-profile-test-entrypoint-test-build-only.diff) | Добавляет специальный режим тестовой сборки: Telegram запускает встроенные тесты ClientHello и завершает работу, не открывая обычный интерфейс. |
+| 6 | [`0006`](patches/0006-proxy-check-coordinator-and-rotation.diff) | Пропускает проверки прокси через общую очередь, ограничивает число одновременных проверок и даёт автопереключению результаты этих проверок. |
+| 7 | [`0007`](patches/0007-proxy-address-priority-and-resolution.diff) | Если имя прокси имеет и IPv4-, и IPv6-адреса, выбирает семейство адресов в соответствии с настройкой пользователя. |
+| 8 | [`0008`](patches/0008-proxy-ui-style.diff) | Задаёт размеры, отступы, цвета и состояния элементов, которые нужны новому экрану настроек прокси. |
+| 9 | [`0009`](patches/0009-proxy-ui-implementation.diff) | Добавляет в окно прокси выбор ClientHello, параметры задержки, проверку доступности, ping и настройку автоматического переключения. |
+| 10 | [`0010`](patches/0010-proxy-ui-model.diff) | Передаёт интерфейсу состояние каждой строки: выбран ли прокси, проверяется ли он, доступен ли, каков ping и когда закончилась проверка. |
+| 11 | [`0011`](patches/0011-proxy-resolved-ip-health-and-timeouts.diff) | Запоминает неудачи отдельных IP-адресов одного прокси, временно исключает проблемные адреса и корректирует таймаут следующей попытки. |
+| 12 | [`0012`](patches/0012-main-menu-version-commit-build-tooltip.diff) | Показывает в главном меню версию приложения, commit исходников и сведения о конкретной сборке, чтобы бинарник можно было однозначно идентифицировать. |
+| 13 | [`0013`](patches/0013-settings-versioning-slow-policy-and-resumption-terminology.diff) | Добавляет версию к расширенным настройкам, выносит расчёт задержки в отдельную проверяемую функцию и приводит время жизни Chromium resumption к единым правилам. |
+| 14 | [`0014`](patches/0014-proxy-check-instance-lifetime.diff) | Отменяет проверку, если связанный аккаунт или MTProto `Instance` уже уничтожен, вместо обращения к недействительному объекту. |
+| 15 | [`0015`](patches/0015-resolved-ip-round-robin-and-quarantine.diff) | Перебирает IP-адреса прокси по кругу и помещает неудачные адреса в карантин, чтобы один «мёртвый» IP не блокировал всё имя хоста. |
+| 16 | [`0016`](patches/0016-proxy-ui-global-and-offline-configuration.diff) | Позволяет заранее выбрать глобальный ClientHello и задержку, даже когда прокси выключен. Убирает постоянное секундное обновление всего списка. |
+| 17 | [`0017`](patches/0017-resolved-ip-failure-classification-and-backoff.diff) | Отличает ошибку конкретного IP от общей ошибки прокси. Ожидание после серии неудач выполняется снаружи соединения и больше не удерживает его в подвешенном состоянии. |
+| 18 | [`0018`](patches/0018-slow-connect-overflow-and-slot-hardening.diff) | Ограничивает арифметику таймеров, гарантированно возвращает занятые слоты планировщика и не позволяет сразу открыть пачку TCP-соединений. |
+| 19 | [`0019`](patches/0019-proxy-settings-length-prefixed-extension.diff) | Записывает расширенные настройки блоком с версией и точной длиной. Неизвестный или повреждённый блок можно пропустить, не сдвигая чтение остальных настроек. |
+| 20 | [`0020`](patches/0020-proxy-check-threading-and-adaptive-autoswitch.diff) | Выполняет координатор проверок только в главном потоке. После обрыва проверяет не больше двух альтернатив одновременно, ждёт ограниченное время и повторяет неудачные раунды с backoff. |
+| 21 | [`0021`](patches/0021-production-policy-tests-and-clienthello-stress.diff) | Компилирует тесты непосредственно против production policy-заголовков и многократно проверяет ClientHello с разными допустимыми перестановками и размерами. |
+| 22 | [`0022`](patches/0022-test-harness-and-settings-deserialization-hardening.diff) | Исправляет запуск встроенных тестов и строже проверяет границы, версии и значения при чтении расширенных настроек. При ошибке используются безопасные значения по умолчанию. |
+| 23 | [`0023`](patches/0023-ui-localization-and-clienthello-validation-hardening.diff) | Переносит новые подписи в систему переводов, обновляет статус ClientHello раз в минуту и проверяет результат после каждой модификации TLS-пакета. |
+| 24 | [`0024`](patches/0024-clienthello-selection-and-profile-lifecycle-hardening.diff) | Выбирает профиль `RANDOM` один раз на сессию приложения, уточняет переходы Chromium 150 между fresh/resumed и не имитирует resumption там, где нет настоящего серверного состояния. |
+| 25 | [`0025`](patches/0025-faketls-classification-and-build-metadata-hardening.diff) | Использует одно правило распознавания FakeTLS во всех сетевых компонентах. Проверяет встроенные commit/build/Qt значения перед показом ссылки в меню. |
+| 26 | [`0026`](patches/0026-proxy-rotation-scoring-and-timeout-budget-hardening.diff) | Выбирает прокси не по одному случайному ping, а по сглаженной задержке, её разбросу, истории отказов и возрасту результата. Ограничивает суммарное время ожидания подключения. |
+| 27 | [`0027`](patches/0027-proxy-check-lifecycle-and-ui-localization-hardening.diff) | Безопасно обрабатывает проверку, завершившуюся прямо во время запуска, не переставляет строки под курсором и использует цельные переводимые фразы с правильными формами минут. |
 
 Серия автоматически проверяется workflow
 [`Validate MTProto patch series`](.github/workflows/validate-patch-series.yml):
