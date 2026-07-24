@@ -43,6 +43,7 @@ ClientHello, похожие на популярные браузеры, акку
 | 25 | [`0025`](patches/0025-faketls-classification-and-build-metadata-hardening.diff) | Использует одно правило распознавания FakeTLS во всех сетевых компонентах. Проверяет встроенные commit/build/Qt значения перед показом ссылки в меню. |
 | 26 | [`0026`](patches/0026-proxy-rotation-scoring-and-timeout-budget-hardening.diff) | Выбирает прокси не по одному случайному ping, а по сглаженной задержке, её разбросу, истории отказов и возрасту результата. Ограничивает суммарное время ожидания подключения. |
 | 27 | [`0027`](patches/0027-proxy-check-lifecycle-and-ui-localization-hardening.diff) | Безопасно обрабатывает проверку, завершившуюся прямо во время запуска, не переставляет строки под курсором и использует цельные переводимые фразы с правильными формами минут. |
+| 28 | [`0028`](patches/0028-msvc-proxy-check-coordinator-build-fix.diff) | Устраняет конфликт имён локальных переменных в координаторе проверок, из-за которого MSVC останавливал полную сборку Telegram. |
 
 Серия автоматически проверяется workflow
 [`Validate MTProto patch series`](.github/workflows/validate-patch-series.yml):

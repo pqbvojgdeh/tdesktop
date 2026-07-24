@@ -199,6 +199,15 @@ jobs:
             exit 1
           fi
           grep -Fq 'AssertProxyCheckCoordinatorThread' "$coordinator"
+          grep -Fq \
+            'const auto slotStarted = _state.start(kMaxConcurrentProxyChecks);' \
+            "$coordinator"
+          if grep -Fq \
+            'const auto started = _state.start(kMaxConcurrentProxyChecks);' \
+            "$coordinator"; then
+            echo "::error::Proxy coordinator reintroduces the MSVC local-name collision."
+            exit 1
+          fi
           grep -Fq 'kSlowConnectMaximumTimeoutBudgetMs' "$tcp"
           grep -Fq 'kSlowConnectMaximumTimeoutBudgetMs' "$resolving"
           grep -Fq 'target_compile_definitions(td_mtproto PRIVATE' "$cmake_root"

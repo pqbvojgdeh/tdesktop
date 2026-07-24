@@ -1,0 +1,15 @@
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+index 9d81e1aa9bb3d83fd7ad9ad863f612c2e7e1817a..0174e24c7e9f64bb360bc6550b65f64eb8916233 100644
+--- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
++++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+@@ -144,8 +144,8 @@ private:
+ 			entry.active = true;
+ 			entry.starting = true;
+ 			entry.startedAt = crl::now();
+-			const auto started = _state.start(kMaxConcurrentProxyChecks);
+-			Expects(started);
++			const auto slotStarted = _state.start(kMaxConcurrentProxyChecks);
++			Expects(slotStarted);
+ 			const auto id = entry.id;
+ 			StartProxyCheck(
+ 				not_null<Instance*>(mtproto),
