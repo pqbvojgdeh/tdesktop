@@ -7,6 +7,8 @@ using namespace MTP::details;
 
 int main() {
 	static_assert(kSlowConnectMaximumAdditionalDelayMs == 7500);
+	static_assert(kSlowConnectSchedulingMarginMs == 500);
+	static_assert(kSlowConnectMaximumTimeoutBudgetMs == 8000);
 	static_assert(kSlowConnectMaximumPending == 16);
 	static_assert(kSlowConnectMaximumSlots == 128);
 	static_assert(kSlowConnectOverflowMinimumDelayMs == 100);
