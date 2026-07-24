@@ -1,6 +1,6 @@
 #include "mtproto/details/mtproto_client_hello_validation.h"
+#include "test_check.h"
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -10,12 +10,12 @@ namespace {
 using Bytes = std::vector<std::byte>;
 void b(Bytes &v, std::uint8_t x) { v.push_back(std::byte(x)); }
 void u16(Bytes &v, std::size_t x) {
-	assert(x <= std::size_t{ 0xFFFF });
+	TEST_CHECK(x <= std::size_t{ 0xFFFF });
 	b(v, static_cast<std::uint8_t>((x >> 8) & 0xFF));
 	b(v, static_cast<std::uint8_t>(x & 0xFF));
 }
 void u24(Bytes &v, std::size_t x) {
-	assert(x <= std::size_t{ 0xFFFFFF });
+	TEST_CHECK(x <= std::size_t{ 0xFFFFFF });
 	b(v, static_cast<std::uint8_t>((x >> 16) & 0xFF));
 	b(v, static_cast<std::uint8_t>((x >> 8) & 0xFF));
 	b(v, static_cast<std::uint8_t>(x & 0xFF));
@@ -66,20 +66,20 @@ int main() {
 	using MTP::details::ValidateClientHello;
 	const auto fresh = makeHello(false);
 	const auto freshResult = ValidateClientHello(fresh, 0);
-	assert(freshResult.valid && !freshResult.resumed && freshResult.hasKeyShare);
+	TEST_CHECK(freshResult.valid && !freshResult.resumed && freshResult.hasKeyShare);
 
 	const auto resumed = makeHello(true);
 	const auto resumedResult = ValidateClientHello(resumed, 1);
-	assert(resumedResult.valid && resumedResult.resumed);
-	assert(!ValidateClientHello(resumed, 0).valid);
+	TEST_CHECK(resumedResult.valid && resumedResult.resumed);
+	TEST_CHECK(!ValidateClientHello(resumed, 0).valid);
 
 	const auto p256 = ValidateClientHello(makeHello(false, true), 0);
-	assert(p256.valid && p256.hasP256KeyShare);
+	TEST_CHECK(p256.valid && p256.hasP256KeyShare);
 
 	auto malformed = fresh;
 	malformed[4] = std::byte(0);
-	assert(!ValidateClientHello(malformed, 0).valid);
-	assert(!ValidateClientHello(std::span<const std::byte>(), -1).valid);
+	TEST_CHECK(!ValidateClientHello(malformed, 0).valid);
+	TEST_CHECK(!ValidateClientHello(std::span<const std::byte>(), -1).valid);
 
 	std::cout << "ClientHello validation tests passed.\n";
 }

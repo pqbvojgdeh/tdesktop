@@ -122,6 +122,7 @@ jobs:
           settings="source/Telegram/SourceFiles/core/proxy_settings_extension_policy.h"
           rotation="source/Telegram/SourceFiles/core/proxy_rotation_policy.h"
           coordinator="source/Telegram/SourceFiles/mtproto/proxy_check.cpp"
+          tests="patch-source/patches/tests"
 
           grep -Fq 'ResolvedIpFailureOrigin::ChildError' "$resolving"
           if grep -Fq '_waitingForQuarantine' "$resolving"; then
@@ -131,7 +132,7 @@ jobs:
           grep -Fq \
             '#include "mtproto/details/mtproto_slow_connect_policy.h"' \
             "$tcp"
-          grep -Fq 'kSlowConnectOverflowMinimumDelayMs' "$tls"
+          grep -Fq 'NormalizeSlowConnectOverflowDelay' "$tls"
           if grep -Fq 'Connect now instead' "$tls"; then
             echo "::error::Slow-connect overflow still fails open."
             exit 1
@@ -139,6 +140,14 @@ jobs:
           grep -Fq 'kProxySettingsExtensionVersion = std::int32_t(2)' "$settings"
           grep -Fq 'ProxyRotationShouldKeepWaiting' "$rotation"
           grep -Fq 'AssertProxyCheckCoordinatorThread' "$coordinator"
+          if grep -Eq 'Expects\(_state\.(start|finish)' "$coordinator"; then
+            echo "::error::Coordinator state mutation is hidden inside Expects."
+            exit 1
+          fi
+          if grep -R -Eq '(^|[^[:alnum:]_])assert\(' "$tests"; then
+            echo "::error::Policy tests must not depend on assert side effects."
+            exit 1
+          fi
           if grep -Fq 'cmake -S . -B ..\out' "$build_profile"; then
             echo "::error::MTProto test relink reintroduces a non-canonical source path."
             exit 1
@@ -156,8 +165,11 @@ jobs:
             name="$(basename "${source_file%.cpp}")"
             g++ \
               -std=c++20 \
+              -DNDEBUG \
               -Wall \
               -Wextra \
+              -Wconversion \
+              -Wsign-conversion \
               -Werror \
               -pthread \
               -Isource/Telegram/SourceFiles \

@@ -1,6 +1,6 @@
 #include "core/proxy_settings_extension_policy.h"
+#include "test_check.h"
 
-#include <cassert>
 #include <iostream>
 
 int main() {
@@ -18,20 +18,20 @@ int main() {
 		.slowJitter = 150,
 		.preferIPv6 = 0,
 	};
-	assert(IsProxySettingsExtensionValid(valid));
+	TEST_CHECK(IsProxySettingsExtensionValid(valid));
 
 	auto invalid = valid;
 	invalid.slowMode = 2;
-	assert(!IsProxySettingsExtensionValid(invalid));
+	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
 	invalid = valid;
 	invalid.preferIPv6 = -1;
-	assert(!IsProxySettingsExtensionValid(invalid));
+	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
 	invalid = valid;
 	invalid.clientHelloType = 6;
-	assert(!IsProxySettingsExtensionValid(invalid));
+	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
 	invalid = valid;
 	invalid.slowDelay = -1;
-	assert(!IsProxySettingsExtensionValid(invalid));
+	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
 
 	std::cout << "Production proxy-settings extension policy tests passed.\n";
 }

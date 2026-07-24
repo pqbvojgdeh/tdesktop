@@ -111,36 +111,6 @@ jobs:
             echo "- patched build: requested"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Cancel upstream-dev push workflows
-        if: steps.sync.outputs.changed == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          sleep 10
-
-          for status in queued in_progress; do
-            mapfile -t run_ids < <(
-              gh run list \
-                --repo "$GITHUB_REPOSITORY" \
-                --branch upstream-dev \
-                --event push \
-                --status "$status" \
-                --limit 100 \
-                --json databaseId \
-                --jq '.[].databaseId'
-            )
-
-            for run_id in "${run_ids[@]}"; do
-              if [[ -n "$run_id" ]]; then
-                gh run cancel "$run_id" \
-                  --repo "$GITHUB_REPOSITORY" || true
-              fi
-            done
-          done
-
       - name: Start vanilla and patched Windows builds
         if: steps.sync.outputs.changed == 'true'
         shell: bash
@@ -154,7 +124,6 @@ jobs:
               build-patched-upstream-dev-windows.yml \
               --repo "$GITHUB_REPOSITORY" \
               --ref mtproto-patches \
-              -f "source_sha=${{ steps.sync.outputs.official_sha }}" \
               -f "variant=$variant"
 
             echo "$variant Windows build dispatched for ${{ steps.sync.outputs.official_sha }}."

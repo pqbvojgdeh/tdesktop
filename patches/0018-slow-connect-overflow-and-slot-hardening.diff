@@ -32,15 +32,16 @@ diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_slow_connect_policy.h 
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -115,15 +115,38 @@ struct SlowConnectSchedule {
+@@ -115,15 +115,39 @@ struct SlowConnectSchedule {
  	auto result = SlowConnectSchedule();
  	const auto policy = NormalizeSlowConnectPolicy(delay, jitter);
  	delay = policy.delay;
  	jitter = policy.jitter;
 +	const auto overflowDelay = [] {
-+		return sc::milliseconds(QRandomGenerator::global()->bounded(
-+			kSlowConnectOverflowMinimumDelayMs,
-+			kSlowConnectOverflowMaximumDelayMs + 1));
++		return sc::milliseconds(NormalizeSlowConnectOverflowDelay(
++			QRandomGenerator::global()->bounded(
++				kSlowConnectOverflowMinimumDelayMs,
++				kSlowConnectOverflowMaximumDelayMs + 1)));
 +	};
  	const QMutexLocker lock(&SlowConnectMutex());
  	auto &slots = SlowConnectSlots();
@@ -71,7 +72,7 @@ diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Teleg
  	const auto extra = jitter
  		? QRandomGenerator::global()->bounded(jitter + 1)
  		: 0;
-@@ -141,12 +163,15 @@ struct SlowConnectSchedule {
+@@ -141,12 +164,15 @@ struct SlowConnectSchedule {
  	result.overflow = (slot.pending >= kMaximumPendingDelayedConnects)
  		|| (next > maximum);
  	if (!result.overflow) {
@@ -87,7 +88,7 @@ diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Teleg
  	}
  	return result;
  }
-@@ -2089,9 +2114,15 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -2089,9 +2115,15 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  		const auto endpoint = SlowConnectEndpoint(address, port);
  		const auto schedule = ReserveSlowConnect(endpoint, delay, jitter);
  		if (schedule.overflow) {

@@ -213,7 +213,7 @@ jobs:
             echo "$sdk"
             echo "vs2026"
             echo "qt6"
-            echo "dependency-cache-v4"
+            echo "dependency-cache-v5"
           } > CACHE_KEY.txt
 
           cache_key="$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')"
@@ -441,7 +441,8 @@ jobs:
           restore-keys: |
             ${{ runner.OS }}-vs2026-upstream-dev-release-qt6-
 
-      - name: Repair legacy pruned dependency cache
+      - name: Repair restored fallback dependency cache
+        if: steps.libraries.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"

@@ -2,7 +2,7 @@ diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinato
 new file mode 100644
 --- /dev/null
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,48 @@
 +/*
 +This file is part of Telegram Desktop,
 +the official desktop application for the Telegram messaging service.
@@ -11,8 +11,6 @@ new file mode 100644
 +https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 +*/
 +#pragma once
-+
-+#include <algorithm>
 +
 +namespace MTP::details {
 +
@@ -70,15 +68,16 @@ diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles
 +		while (_state.canStart(kMaxConcurrentProxyChecks)) {
  			const auto i = ranges::find(
  				_entries,
-@@ -139,6 +140,6 @@ private:
+@@ -139,6 +140,7 @@ private:
  			entry.active = true;
  			entry.starting = true;
  			entry.startedAt = crl::now();
 -			++_activeCount;
-+			Expects(_state.start(kMaxConcurrentProxyChecks));
++			const auto started = _state.start(kMaxConcurrentProxyChecks);
++			Expects(started);
  			const auto id = entry.id;
  			StartProxyCheck(
-@@ -168,6 +169,6 @@ private:
+@@ -168,6 +170,6 @@ private:
  	}
  
  	void armTimer() {
@@ -86,7 +85,7 @@ diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles
 +		if (_state.active() > 0 && !_timer.isActive()) {
  			_timer.callOnce(kProxyCheckTimerInterval);
  		}
-@@ -244,8 +245,5 @@ private:
+@@ -244,8 +246,6 @@ private:
  			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
  		_entries.erase(i);
 -		if (wasActive) {
@@ -94,10 +93,11 @@ diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles
 -			--_activeCount;
 -		}
 -		Expects(_activeCount >= 0);
-+		Expects(_state.finish(wasActive));
++		const auto finished = _state.finish(wasActive);
++		Expects(finished);
 +		Expects(_state.valid());
  		for (const auto &weak : listeners) {
-@@ -272,7 +270,7 @@ private:
+@@ -272,7 +272,7 @@ private:
  	}
  
  	uint64 _idCounter = 0;

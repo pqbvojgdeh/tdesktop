@@ -1,6 +1,6 @@
 #include "core/proxy_rotation_policy.h"
+#include "test_check.h"
 
-#include <cassert>
 #include <iostream>
 
 int main() {
@@ -19,17 +19,17 @@ int main() {
 
 	const auto stableScore = ProxyRotationSelectionScore(stable, 110, 0);
 	const auto flakyScore = ProxyRotationSelectionScore(flaky, 80, 0);
-	assert(stableScore < flakyScore);
-	assert(ProxyRotationSelectionScore(stable, 110, 30) > stableScore);
+	TEST_CHECK(stableScore < flakyScore);
+	TEST_CHECK(ProxyRotationSelectionScore(stable, 110, 30) > stableScore);
 
-	assert(ProxyRotationShouldKeepWaiting(true, 0));
-	assert(ProxyRotationShouldKeepWaiting(
+	TEST_CHECK(ProxyRotationShouldKeepWaiting(true, 0));
+	TEST_CHECK(ProxyRotationShouldKeepWaiting(
 		true,
 		kProxyRotationSelectionMaximumWaitMs - 1));
-	assert(!ProxyRotationShouldKeepWaiting(
+	TEST_CHECK(!ProxyRotationShouldKeepWaiting(
 		true,
 		kProxyRotationSelectionMaximumWaitMs));
-	assert(!ProxyRotationShouldKeepWaiting(false, 0));
+	TEST_CHECK(!ProxyRotationShouldKeepWaiting(false, 0));
 
 	std::cout << "Production proxy-rotation selection policy tests passed.\n";
 }

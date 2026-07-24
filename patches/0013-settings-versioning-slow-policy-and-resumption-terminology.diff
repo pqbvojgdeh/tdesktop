@@ -459,47 +459,46 @@ index b22c7e4..0a66397 100644
  		std::memory_order_relaxed);
  }
  
-@@ -437,4 +442,43 @@ bool ProxyData::addressComesFirst(
+@@ -437,4 +442,42 @@ bool ProxyData::addressComesFirst(
  		: (firstV6 == preferIPv6);
  }
  
-+
 +QStringList ProxyData::orderResolvedAddresses(
-+        const QStringList &addresses,
-+        const QString &host,
-+        uint32 port,
-+        bool preferIPv6) {
-+    static auto mutex = QMutex();
-+    using Key = std::tuple<QString, uint32, bool>;
-+    static auto cursors = std::map<Key, std::size_t>();
-+    constexpr auto kMaximumCursors = std::size_t(256);
++		const QStringList &addresses,
++		const QString &host,
++		uint32 port,
++		bool preferIPv6) {
++	static auto mutex = QMutex();
++	using Key = std::tuple<QString, uint32, bool>;
++	static auto cursors = std::map<Key, std::size_t>();
++	constexpr auto kMaximumCursors = std::size_t(256);
 +
-+    auto ipv4 = QStringList();
-+    auto ipv6 = QStringList();
-+    for (const auto &address : addresses) {
-+        auto &bucket = qthelp::is_ipv6(address) ? ipv6 : ipv4;
-+        if (!bucket.contains(address, Qt::CaseInsensitive)) {
-+            bucket.push_back(address);
-+        }
-+    }
-+    const auto rotateBucket = [&](QStringList &bucket, bool isIpv6) {
-+        if (bucket.size() < 2) {
-+            return;
-+        }
-+        const auto lock = QMutexLocker(&mutex);
-+        if (cursors.size() >= kMaximumCursors) {
-+            cursors.clear();
-+        }
-+        auto &cursor = cursors[{ host.toLower(), port, isIpv6 }];
-+        const auto offset = int(cursor++ % std::size_t(bucket.size()));
-+        std::rotate(
-+            bucket.begin(),
-+            bucket.begin() + offset,
-+            bucket.end());
-+    };
-+    rotateBucket(ipv4, false);
-+    rotateBucket(ipv6, true);
-+    return preferIPv6 ? (ipv6 + ipv4) : (ipv4 + ipv6);
++	auto ipv4 = QStringList();
++	auto ipv6 = QStringList();
++	for (const auto &address : addresses) {
++		auto &bucket = qthelp::is_ipv6(address) ? ipv6 : ipv4;
++		if (!bucket.contains(address, Qt::CaseInsensitive)) {
++			bucket.push_back(address);
++		}
++	}
++	const auto rotateBucket = [&](QStringList &bucket, bool isIpv6) {
++		if (bucket.size() < 2) {
++			return;
++		}
++		const auto lock = QMutexLocker(&mutex);
++		if (cursors.size() >= kMaximumCursors) {
++			cursors.clear();
++		}
++		auto &cursor = cursors[{ host.toLower(), port, isIpv6 }];
++		const auto offset = int(cursor++ % std::size_t(bucket.size()));
++		std::rotate(
++			bucket.begin(),
++			bucket.begin() + offset,
++			bucket.end());
++	};
++	rotateBucket(ipv4, false);
++	rotateBucket(ipv6, true);
++	return preferIPv6 ? (ipv6 + ipv4) : (ipv4 + ipv6);
 +}
 +
  } // namespace MTP

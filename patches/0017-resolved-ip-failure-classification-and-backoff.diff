@@ -46,7 +46,7 @@ new file mode 100644
 +
 +[[nodiscard]] constexpr bool ShouldQuarantineResolvedIp(
 +		ResolvedIpFailureOrigin origin,
-+		int errorCode = 0) {
++		int errorCode = -1) {
 +	switch (origin) {
 +	case ResolvedIpFailureOrigin::ConnectTimeout:
 +	case ResolvedIpFailureOrigin::ExternalTimeout:

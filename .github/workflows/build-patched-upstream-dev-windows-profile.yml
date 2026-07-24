@@ -67,8 +67,6 @@ jobs:
     name: ${{ inputs.profile_title }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
-    continue-on-error: true
-
     outputs:
       built: ${{ steps.result.outputs.built }}
 
@@ -462,6 +460,7 @@ jobs:
               /nologo `
               /std:c++20 `
               /EHsc `
+              /DNDEBUG `
               /W4 `
               /WX `
               "/I$sourceDir\Telegram\SourceFiles" `
@@ -686,6 +685,9 @@ jobs:
                   -name '*.hpp' -o \
                   -name '*.inc' -o \
                   -name '*.cmake' -o \
+                  -name 'Makefile' -o \
+                  -name '*.pc' -o \
+                  -name '*.pc.in' -o \
                   -path '*/include/*' -o \
                   -path '*/objects-*' -o \
                   -path '*/cache_keys/*' -o \
