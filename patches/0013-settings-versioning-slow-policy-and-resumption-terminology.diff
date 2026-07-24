@@ -194,7 +194,7 @@ index 53de705..9938fb3 100644
 -		auto tickets = std::vector<TimePoint>();
 -		tickets.reserve(_ticketSlots);
 +		auto slots = std::vector<TimePoint>();
-+		slots.reserve(_resumptionSlots);
++		slots.reserve(static_cast<std::size_t>(_resumptionSlots));
  		auto longest = Lifetime(0);
 -		for (auto slot = 0; slot != _ticketSlots; ++slot) {
 +		for (auto slot = 0; slot != _resumptionSlots; ++slot) {
