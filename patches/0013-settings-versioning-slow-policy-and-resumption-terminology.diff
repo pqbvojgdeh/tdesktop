@@ -459,7 +459,7 @@ index b22c7e4..0a66397 100644
  		std::memory_order_relaxed);
  }
  
-@@ -437,4 +442,40 @@ bool ProxyData::addressComesFirst(
+@@ -437,4 +442,43 @@ bool ProxyData::addressComesFirst(
  		: (firstV6 == preferIPv6);
  }
  
@@ -492,7 +492,10 @@ index b22c7e4..0a66397 100644
 +        }
 +        auto &cursor = cursors[{ host.toLower(), port, isIpv6 }];
 +        const auto offset = int(cursor++ % std::size_t(bucket.size()));
-+        std::rotate(begin(bucket), begin(bucket) + offset, end(bucket));
++        std::rotate(
++            bucket.begin(),
++            bucket.begin() + offset,
++            bucket.end());
 +    };
 +    rotateBucket(ipv4, false);
 +    rotateBucket(ipv6, true);
