@@ -216,8 +216,13 @@ jobs:
           fi
           grep -Fq '_proxyCHelloStatusTimer.callEach(crl::time(60 * 1000));' "$proxy_ui"
           grep -Fq 'tr::lng_proxy_client_hello_profile()' "$proxy_ui"
+          grep -Fq 'const auto generation = item.checkGeneration;' "$proxy_ui"
+          grep -Fq '_batchSetupInProgress = true;' "$proxy_ui"
+          grep -Fq 'const auto detailAvailable = std::max(' "$proxy_ui"
           grep -Fq '"lng_proxy_client_hello_profile"' "$lang"
           grep -Fq '"lng_proxy_random_profile" = "Random for this app session";' "$lang"
+          grep -Fq '"lng_proxy_ch_status_refresh#one"' "$lang"
+          grep -Fq '"lng_proxy_ch_status_refresh#other"' "$lang"
           grep -Fq '"lng_build_metadata" = "Commit: {commit}\nBuild: {build}\nQt: {qt}";' "$lang"
           grep -Fq 'tr::lng_settings_current_version(' "$main_menu"
           grep -Fq 'ResolveEmbeddedBuildMetadata(' "$main_menu"
@@ -234,6 +239,14 @@ jobs:
           fi
           if grep -Eq 'QPointer<QTimer>|new QTimer|setInterval\(1000\)' "$proxy_ui"; then
             echo "::error::Proxy UI still performs a one-second list-wide refresh."
+            exit 1
+          fi
+          if grep -Fq 'item.checker = MTP::ScheduleProxyCheck(' "$proxy_ui"; then
+            echo "::error::Proxy UI stores a handle after a possibly synchronous callback."
+            exit 1
+          fi
+          if grep -Fq '_checksFinished' "$proxy_ui"; then
+            echo "::error::Proxy UI still rebuilds and reorders rows after a check batch."
             exit 1
           fi
           if grep -Eq 'Expects\(_state\.(start|finish)' "$coordinator"; then
