@@ -217,7 +217,13 @@ diff --git a/Telegram/SourceFiles/mtproto/connection_tcp.cpp b/Telegram/SourceFi
 index e3d6259..7fd746f 100644
 --- a/Telegram/SourceFiles/mtproto/connection_tcp.cpp
 +++ b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
-@@ -21,7 +21,8 @@ namespace {
+@@ -10,4 +10,5 @@
+ #include "mtproto/details/mtproto_abstract_socket.h"
++#include "mtproto/details/mtproto_slow_connect_policy.h"
+ #include "base/bytes.h"
+ #include "base/openssl_help.h"
+ #include "base/random.h"
+@@ -21,7 +22,8 @@ namespace {
  
  constexpr auto kPacketSizeMax = int(0x01000000 * sizeof(mtpPrime));
  constexpr auto kFullConnectionTimeout = 8 * crl::time(1000);

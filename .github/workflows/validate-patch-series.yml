@@ -116,6 +116,7 @@ jobs:
         run: |
           set -euo pipefail
           resolving="source/Telegram/SourceFiles/mtproto/connection_resolving.cpp"
+          tcp="source/Telegram/SourceFiles/mtproto/connection_tcp.cpp"
           tls="source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
           settings="source/Telegram/SourceFiles/core/proxy_settings_extension_policy.h"
           rotation="source/Telegram/SourceFiles/core/proxy_rotation_policy.h"
@@ -126,6 +127,9 @@ jobs:
             echo "::error::ResolvingConnection still waits inside quarantine."
             exit 1
           fi
+          grep -Fq \
+            '#include "mtproto/details/mtproto_slow_connect_policy.h"' \
+            "$tcp"
           grep -Fq 'kSlowConnectOverflowMinimumDelayMs' "$tls"
           if grep -Fq 'Connect now instead' "$tls"; then
             echo "::error::Slow-connect overflow still fails open."
