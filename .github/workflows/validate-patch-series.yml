@@ -145,6 +145,9 @@ jobs:
           resolving="source/Telegram/SourceFiles/mtproto/connection_resolving.cpp"
           tcp="source/Telegram/SourceFiles/mtproto/connection_tcp.cpp"
           tls="source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
+          fake_tls="source/Telegram/SourceFiles/mtproto/details/mtproto_fake_tls_policy.h"
+          proxy_data="source/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp"
+          session="source/Telegram/SourceFiles/mtproto/session_private.cpp"
           settings="source/Telegram/SourceFiles/core/proxy_settings_extension_policy.h"
           rotation="source/Telegram/SourceFiles/core/proxy_rotation_policy.h"
           coordinator="source/Telegram/SourceFiles/mtproto/proxy_check.cpp"
@@ -155,6 +158,7 @@ jobs:
           proxy_ui="source/Telegram/SourceFiles/boxes/connection_box.cpp"
           lang="source/Telegram/Resources/langs/lang.strings"
           main_menu="source/Telegram/SourceFiles/window/window_main_menu.cpp"
+          menu_helpers="source/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
           tests="patch-source/patches/tests"
 
           grep -Fq 'ResolvedIpFailureOrigin::ChildError' "$resolving"
@@ -166,6 +170,15 @@ jobs:
             '#include "mtproto/details/mtproto_slow_connect_policy.h"' \
             "$tcp"
           grep -Fq 'NormalizeSlowConnectOverflowDelay' "$tls"
+          grep -Fq 'kFakeTlsMinimumSecretSize = std::size_t(21)' "$fake_tls"
+          grep -Fq 'details::IsFakeTlsSecret(secretFromMtprotoPassword())' "$proxy_data"
+          grep -Fq '_proxy.usesFakeTls()' "$tcp"
+          grep -Fq 'proxy.usesFakeTls()' "$resolving"
+          grep -Fq 'proxy.usesFakeTls()' "$session"
+          if grep -Eq 'secret\.size\(\) (> 17|>= 21)' "$resolving" "$session"; then
+            echo "::error::Slow FakeTLS classification bypasses the shared policy."
+            exit 1
+          fi
           if grep -Fq 'Connect now instead' "$tls"; then
             echo "::error::Slow-connect overflow still fails open."
             exit 1
@@ -190,7 +203,15 @@ jobs:
           grep -Fq 'tr::lng_proxy_client_hello_profile()' "$proxy_ui"
           grep -Fq '"lng_proxy_client_hello_profile"' "$lang"
           grep -Fq '"lng_proxy_random_profile" = "Random for this app session";' "$lang"
+          grep -Fq '"lng_build_metadata" = "Commit: {commit}\nBuild: {build}\nQt: {qt}";' "$lang"
           grep -Fq 'tr::lng_settings_current_version(' "$main_menu"
+          grep -Fq 'ResolveEmbeddedBuildMetadata(' "$main_menu"
+          grep -Fq 'ResolveEmbeddedBuildMetadata(' "$menu_helpers"
+          grep -Fq 'QString::fromLatin1(QT_VERSION_STR)' "$menu_helpers"
+          test "$(grep -Foc '__TDESKTOP_COMMIT_FULL__' "$main_menu")" = 1
+          test "$(grep -Foc '__TDESKTOP_COMMIT_SHORT__' "$main_menu")" = 1
+          test "$(grep -Foc '__TDESKTOP_COMMIT_TIME_UTC__' "$menu_helpers")" = 1
+          test "$(grep -Foc '__TDESKTOP_BUILD_TIME_UTC__' "$menu_helpers")" = 1
           test -s patch-source/patches/CLIENTHELLO_PROFILE_MAINTENANCE.md
           if grep -Fq '(void)ValidateClientHello' "$tls"; then
             echo "::error::ClientHello mutations still discard the validation result."

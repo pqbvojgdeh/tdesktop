@@ -279,8 +279,9 @@ jobs:
             "$source_dir/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
 
           grep -Fq "u\"$SOURCE_SHORT_SHA\"_q" "$menu_file"
-          grep -Fq "Commit: $source_commit_time_utc" "$helper_file"
-          grep -Fq "Build: $build_time_utc" "$helper_file"
+          grep -Fq "u\"$source_commit_time_utc\"_q" "$helper_file"
+          grep -Fq "u\"$build_time_utc\"_q" "$helper_file"
+          grep -Fq "QString::fromLatin1(QT_VERSION_STR)" "$helper_file"
 
           resolving="$source_dir/Telegram/SourceFiles/mtproto/connection_resolving.cpp"
           tls_socket="$source_dir/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"

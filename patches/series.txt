@@ -22,3 +22,4 @@
 0022-test-harness-and-settings-deserialization-hardening.diff
 0023-ui-localization-and-clienthello-validation-hardening.diff
 0024-clienthello-selection-and-profile-lifecycle-hardening.diff
+0025-faketls-classification-and-build-metadata-hardening.diff
