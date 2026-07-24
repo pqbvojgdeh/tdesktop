@@ -122,6 +122,10 @@ jobs:
           settings="source/Telegram/SourceFiles/core/proxy_settings_extension_policy.h"
           rotation="source/Telegram/SourceFiles/core/proxy_rotation_policy.h"
           coordinator="source/Telegram/SourceFiles/mtproto/proxy_check.cpp"
+          cmake_root="source/Telegram/CMakeLists.txt"
+          settings_proxy="source/Telegram/SourceFiles/core/core_settings_proxy.cpp"
+          resumption="source/Telegram/SourceFiles/mtproto/details/mtproto_chromium_resumption_cache.h"
+          tls_header="source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h"
           tests="patch-source/patches/tests"
 
           grep -Fq 'ResolvedIpFailureOrigin::ChildError' "$resolving"
@@ -140,6 +144,12 @@ jobs:
           grep -Fq 'kProxySettingsExtensionVersion = std::int32_t(2)' "$settings"
           grep -Fq 'ProxyRotationShouldKeepWaiting' "$rotation"
           grep -Fq 'AssertProxyCheckCoordinatorThread' "$coordinator"
+          grep -Fq 'target_compile_definitions(td_mtproto PRIVATE' "$cmake_root"
+          grep -Fq '#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS' "$tls"
+          grep -Fq '#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS' "$tls_header"
+          grep -Fq 'Invalid proxy settings extension ignored.' "$settings_proxy"
+          grep -Fq 'return MTP::ProxyData::CHelloType::RANDOM;' "$settings_proxy"
+          grep -Fq 'std::chrono::ceil<Lifetime>' "$resumption"
           if grep -Eq 'Expects\(_state\.(start|finish)' "$coordinator"; then
             echo "::error::Coordinator state mutation is hidden inside Expects."
             exit 1

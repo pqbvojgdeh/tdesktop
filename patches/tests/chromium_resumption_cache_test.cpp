@@ -9,6 +9,7 @@
 
 using Cache = MTP::details::ChromiumResumptionCache<int>;
 using Minutes = std::chrono::minutes;
+using Seconds = std::chrono::seconds;
 
 int main() {
 	const auto start = Cache::TimePoint();
@@ -31,6 +32,14 @@ int main() {
 	TEST_CHECK(cache.slotCount(1, start) == 0);
 	TEST_CHECK(cache.slotCount(2, start) == 2);
 	TEST_CHECK(cache.slotCount(3, start) == 2);
+
+	Cache rounding(1, 2);
+	(void)rounding.confirm(1, [] { return Minutes(2); }, start);
+	const auto rounded = rounding.takeWithRemaining(
+		1,
+		start + Minutes(1) + Seconds(1));
+	TEST_CHECK(rounded.taken);
+	TEST_CHECK(rounded.maximumRemaining == Minutes(1));
 
 	Cache concurrent(128, 2);
 	(void)concurrent.confirm(7, lifetime, start);

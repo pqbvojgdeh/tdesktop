@@ -848,8 +848,11 @@ jobs:
             powershell -NoProfile -Command ^
               "$p='..\out\Release\Telegram.exe';" ^
               "$s=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($p));" ^
-              "if($s.Contains('--validate-mtproto-client-hello')){" ^
-              "Write-Error 'Test entrypoint remains in packaged Telegram.exe'; exit 1 }"
+              "$forbidden=@('--validate-mtproto-client-hello'," ^
+              "'slow-connect-reservation-test.invalid');" ^
+              "foreach($value in $forbidden){if($s.Contains($value)){" ^
+              "Write-Error ('Test harness remains in packaged Telegram.exe: '+$value);" ^
+              "exit 1 }}"
             if errorlevel 1 exit /b 1
           )
 
