@@ -35,6 +35,32 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Enforce ClientHello profile review deadline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from datetime import date
+          import json
+          from pathlib import Path
+
+          path = Path("patch-source/patches/clienthello-profile-review.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          if data.get("schema_version") != 1:
+              raise SystemExit("Unsupported ClientHello review schema.")
+          profiles = data.get("profiles")
+          if not isinstance(profiles, list) or len(profiles) < 6:
+              raise SystemExit("ClientHello review manifest is incomplete.")
+          review_by = date.fromisoformat(data["review_by"])
+          if date.today() > review_by:
+              print(
+                  "::error::ClientHello profiles are past their capture "
+                  f"review deadline ({review_by.isoformat()})."
+              )
+              raise SystemExit(1)
+          print(f"ClientHello capture review is due by {review_by.isoformat()}.")
+          PY
+
       - name: Validate workflows with actionlint
         shell: bash
         run: |
@@ -154,10 +180,18 @@ jobs:
           grep -Fq 'return MTP::ProxyData::CHelloType::RANDOM;' "$settings_proxy"
           grep -Fq 'std::chrono::ceil<Lifetime>' "$resumption"
           grep -Fq 'Every truncated prefix must be rejected.' "$tls"
+          grep -Fq 'StickyRandomClientHelloType()' "$tls"
+          grep -Fq 'PrepareClientHelloRules_YandexGost(), 0, false' "$tls"
+          if grep -Fq 'S("\x00\x29\x00\x94"_q);' "$tls"; then
+            echo "::error::YandexGost still sends an unconditional synthetic PSK."
+            exit 1
+          fi
           grep -Fq '_proxyCHelloStatusTimer.callEach(crl::time(60 * 1000));' "$proxy_ui"
           grep -Fq 'tr::lng_proxy_client_hello_profile()' "$proxy_ui"
           grep -Fq '"lng_proxy_client_hello_profile"' "$lang"
+          grep -Fq '"lng_proxy_random_profile" = "Random for this app session";' "$lang"
           grep -Fq 'tr::lng_settings_current_version(' "$main_menu"
+          test -s patch-source/patches/CLIENTHELLO_PROFILE_MAINTENANCE.md
           if grep -Fq '(void)ValidateClientHello' "$tls"; then
             echo "::error::ClientHello mutations still discard the validation result."
             exit 1

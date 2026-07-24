@@ -21,3 +21,4 @@
 0021-production-policy-tests-and-clienthello-stress.diff
 0022-test-harness-and-settings-deserialization-hardening.diff
 0023-ui-localization-and-clienthello-validation-hardening.diff
+0024-clienthello-selection-and-profile-lifecycle-hardening.diff

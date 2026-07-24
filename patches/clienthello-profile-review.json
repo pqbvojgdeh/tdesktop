@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "last_reviewed": "2026-07-24",
+  "review_by": "2026-10-22",
+  "profiles": [
+    {
+      "id": "chrome-telegram",
+      "label": "Google Chrome (Telegram profile)",
+      "capture_status": "refresh-required"
+    },
+    {
+      "id": "firefox-151",
+      "label": "Mozilla Firefox 151",
+      "capture_status": "refresh-required"
+    },
+    {
+      "id": "firefox-151-permuted",
+      "label": "Mozilla Firefox 151 — permuted extensions",
+      "capture_status": "refresh-required"
+    },
+    {
+      "id": "safari-26.4-macos",
+      "label": "Apple Safari 26.4 (macOS)",
+      "capture_status": "refresh-required"
+    },
+    {
+      "id": "yandex-gost",
+      "label": "Yandex Browser (GOST)",
+      "capture_status": "refresh-required"
+    },
+    {
+      "id": "chromium-150",
+      "label": "Chromium 150",
+      "capture_status": "refresh-required",
+      "open_checks": [
+        "signature_algorithms 0x0904/0x0905/0x0906",
+        "SCT extension 0x0012",
+        "session_ticket extension 0x0023",
+        "synthetic PSK identity length 113"
+      ]
+    }
+  ]
+}
