@@ -115,6 +115,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          build_profile="patch-source/.github/workflows/build-patched-upstream-dev-windows-profile.yml"
           resolving="source/Telegram/SourceFiles/mtproto/connection_resolving.cpp"
           tcp="source/Telegram/SourceFiles/mtproto/connection_tcp.cpp"
           tls="source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp"
@@ -138,6 +139,13 @@ jobs:
           grep -Fq 'kProxySettingsExtensionVersion = std::int32_t(2)' "$settings"
           grep -Fq 'ProxyRotationShouldKeepWaiting' "$rotation"
           grep -Fq 'AssertProxyCheckCoordinatorThread' "$coordinator"
+          if grep -Fq 'cmake -S . -B ..\out' "$build_profile"; then
+            echo "::error::MTProto test relink reintroduces a non-canonical source path."
+            exit 1
+          fi
+          grep -Fq \
+            'cmake -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ..\out' \
+            "$build_profile"
 
       - name: Compile and run production policy tests
         shell: bash

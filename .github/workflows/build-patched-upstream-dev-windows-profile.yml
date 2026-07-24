@@ -830,7 +830,11 @@ jobs:
             if errorlevel 1 exit /b 1
 
             rem Remove the conditional test entrypoint from the distributed EXE.
-            cmake -S . -B ..\out -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF
+            rem Reconfigure through the existing build tree. configure.py
+            rem canonicalizes the source path through the TBuild junction, so
+            rem passing "." as a new source path can make CMake compare the
+            rem D:\ workspace alias with the cached C:\Users path and reject it.
+            cmake -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ..\out
             if errorlevel 1 exit /b 1
 
             cmake --build ..\out ^
