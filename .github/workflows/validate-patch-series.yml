@@ -126,6 +126,9 @@ jobs:
           settings_proxy="source/Telegram/SourceFiles/core/core_settings_proxy.cpp"
           resumption="source/Telegram/SourceFiles/mtproto/details/mtproto_chromium_resumption_cache.h"
           tls_header="source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h"
+          proxy_ui="source/Telegram/SourceFiles/boxes/connection_box.cpp"
+          lang="source/Telegram/Resources/langs/lang.strings"
+          main_menu="source/Telegram/SourceFiles/window/window_main_menu.cpp"
           tests="patch-source/patches/tests"
 
           grep -Fq 'ResolvedIpFailureOrigin::ChildError' "$resolving"
@@ -150,6 +153,19 @@ jobs:
           grep -Fq 'Invalid proxy settings extension ignored.' "$settings_proxy"
           grep -Fq 'return MTP::ProxyData::CHelloType::RANDOM;' "$settings_proxy"
           grep -Fq 'std::chrono::ceil<Lifetime>' "$resumption"
+          grep -Fq 'Every truncated prefix must be rejected.' "$tls"
+          grep -Fq '_proxyCHelloStatusTimer.callEach(crl::time(60 * 1000));' "$proxy_ui"
+          grep -Fq 'tr::lng_proxy_client_hello_profile()' "$proxy_ui"
+          grep -Fq '"lng_proxy_client_hello_profile"' "$lang"
+          grep -Fq 'tr::lng_settings_current_version(' "$main_menu"
+          if grep -Fq '(void)ValidateClientHello' "$tls"; then
+            echo "::error::ClientHello mutations still discard the validation result."
+            exit 1
+          fi
+          if grep -Eq 'QPointer<QTimer>|new QTimer|setInterval\(1000\)' "$proxy_ui"; then
+            echo "::error::Proxy UI still performs a one-second list-wide refresh."
+            exit 1
+          fi
           if grep -Eq 'Expects\(_state\.(start|finish)' "$coordinator"; then
             echo "::error::Coordinator state mutation is hidden inside Expects."
             exit 1

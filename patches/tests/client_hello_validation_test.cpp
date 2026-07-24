@@ -80,6 +80,16 @@ int main() {
 	malformed[4] = std::byte(0);
 	TEST_CHECK(!ValidateClientHello(malformed, 0).valid);
 	TEST_CHECK(!ValidateClientHello(std::span<const std::byte>(), -1).valid);
+	for (auto size = std::size_t(0); size != fresh.size(); ++size) {
+		TEST_CHECK(!ValidateClientHello(
+			std::span<const std::byte>(fresh.data(), size),
+			0).valid);
+	}
+	for (auto i = std::size_t(0); i != 9; ++i) {
+		auto envelopeMutation = fresh;
+		envelopeMutation[i] ^= std::byte(0x5A);
+		TEST_CHECK(!ValidateClientHello(envelopeMutation, 0).valid);
+	}
 
 	std::cout << "ClientHello validation tests passed.\n";
 }
