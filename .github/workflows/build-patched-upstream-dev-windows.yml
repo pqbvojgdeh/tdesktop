@@ -24,20 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  gate:
-    name: Validate trigger
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: Accept build request
-        run: echo "Build request accepted."
-
   source:
     name: Pin upstream-dev source revision
-    needs:
-      - gate
-    if: ${{ needs.gate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -129,13 +117,7 @@ jobs:
   prepare_dependencies:
     name: Prepare and cache Qt / ThirdParty dependencies
     needs:
-      - gate
       - source
-    if: >-
-      ${{
-        needs.gate.result == 'success' &&
-        needs.source.result == 'success'
-      }}
     runs-on: windows-2025-vs2026
     timeout-minutes: 360
     concurrency:
@@ -512,11 +494,13 @@ jobs:
             }
           }
 
+      # Public repositories get a 4 vCPU / 16 GiB Windows runner, so the
+      # dependency build used half of the available cores.
       - name: Prepare Telegram Desktop dependencies
         env:
-          CMAKE_BUILD_PARALLEL_LEVEL: 2
-          CMAKE_INSTALL_PARALLEL_LEVEL: 2
-          NUMBER_OF_PROCESSORS: 2
+          CMAKE_BUILD_PARALLEL_LEVEL: 4
+          CMAKE_INSTALL_PARALLEL_LEVEL: 4
+          NUMBER_OF_PROCESSORS: 4
         run: |
           %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent qt6
 
@@ -621,18 +605,55 @@ jobs:
             echo "- Qt exact hit: \`${{ steps.qt.outputs.cache-hit }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  release_ninja_p2:
-    name: Reliable Release — Ninja / no LTO / parallel 2
+  # Primary profile: the same interprocedural optimization the official
+  # Telegram Desktop release build uses (Telegram/build/build.bat passes
+  # -DDESKTOP_APP_ENABLE_LTO=ON). The LTCG link is memory bound, so the
+  # profile job caps concurrent links at one and enlarges the pagefile.
+  release_ninja_lto:
+    name: Optimized Release — Ninja / IPO-LTO / parallel 4
     needs:
-      - gate
       - source
       - prepare_dependencies
+
+    permissions:
+      contents: read
+
+    uses: ./.github/workflows/build-patched-upstream-dev-windows-profile.yml
+    secrets: inherit
+
+    with:
+      source_sha: ${{ needs.source.outputs.source_sha }}
+      source_repository: ${{ needs.source.outputs.source_repository }}
+      variant: ${{ inputs.variant }}
+      cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
+      runner: windows-2025-vs2026
+      profile: release-ninja-lto
+      profile_title: Optimized Release / Ninja Multi-Config / IPO-LTO / parallel 4
+      generator: ninja
+      # Quoted on purpose: an unquoted on/off is a YAML boolean in some
+      # parsers, and the build script compares this value against "on".
+      lto_mode: "on"
+      parallel: 4
+      require_vs2026: true
+
+  # Fallback profile: runs only when the optimized one produced no package.
+  # This is deliberately the previously proven configuration (no LTO,
+  # parallel 2), so it stays valid even if the optimized profile fails
+  # because of the raised parallelism rather than because of LTO.
+  release_ninja_p2:
+    name: Fallback Release — Ninja / no LTO / parallel 2
+    needs:
+      - source
+      - prepare_dependencies
+      - release_ninja_lto
     if: >-
       ${{
-        needs.gate.result == 'success' &&
+        always() &&
         needs.source.result == 'success' &&
-        needs.prepare_dependencies.result == 'success'
+        needs.prepare_dependencies.result == 'success' &&
+        needs.release_ninja_lto.outputs.built != 'true'
       }}
+
     permissions:
       contents: read
 
@@ -646,26 +667,26 @@ jobs:
       cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
       runner: windows-2025-vs2026
       profile: release-ninja-p2
-      profile_title: Reliable Release / Ninja Multi-Config / no IPO-LTO / parallel 2
+      profile_title: Fallback Release / Ninja Multi-Config / no IPO-LTO / parallel 2
       generator: ninja
-      lto_mode: off
+      lto_mode: "off"
       parallel: 2
       require_vs2026: true
 
   publish_release:
-    name: Publish reliable successful build
+    name: Publish the best successful build
     needs:
-      - gate
       - source
       - prepare_dependencies
+      - release_ninja_lto
       - release_ninja_p2
     if: >-
       ${{
         always() &&
-        needs.gate.result == 'success' &&
         needs.source.result == 'success' &&
         needs.prepare_dependencies.result == 'success' &&
         (
+          needs.release_ninja_lto.outputs.built == 'true' ||
           needs.release_ninja_p2.outputs.built == 'true'
         )
       }}
@@ -680,16 +701,26 @@ jobs:
       contents: write
 
     steps:
-      - name: Select reliable successful artifact
+      - name: Select the best successful artifact
         id: select
         shell: bash
         env:
           SHORT_SHA: ${{ needs.source.outputs.short_sha }}
           VARIANT: ${{ inputs.variant }}
+          LTO_BUILT: ${{ needs.release_ninja_lto.outputs.built }}
+          FALLBACK_BUILT: ${{ needs.release_ninja_p2.outputs.built }}
         run: |
           set -euo pipefail
 
-          profile="release-ninja-p2"
+          if [[ "$LTO_BUILT" == "true" ]]; then
+            profile="release-ninja-lto"
+          elif [[ "$FALLBACK_BUILT" == "true" ]]; then
+            profile="release-ninja-p2"
+          else
+            echo "::error::No profile produced a package."
+            exit 1
+          fi
+
           artifact_name="Telegram-dev-$SHORT_SHA-Windows-x64-$VARIANT-$profile"
 
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
@@ -832,8 +863,14 @@ jobs:
             patched_duration="$duration"
           fi
 
+          # Report what was actually built instead of a hardcoded line: the
+          # published package can come from either the LTO profile or the
+          # no-LTO fallback. The trailing variant is dropped because both
+          # variants share one release.
+          shared_parameters="${BUILD_PARAMETERS% · *}"
+
           {
-            printf '%s\n' 'Windows x64 · MSVC 14.44 · Qt 6 · Ninja Multi-Config · IPO/LTO=OFF'
+            printf '%s\n' "$shared_parameters"
             printf '\n'
             # shellcheck disable=SC2016
             printf '**Vanilla:** `tdesktop-vanilla.%s.7z` — official upstream dev without patches  \n' "$SHORT_SHA"
@@ -849,10 +886,20 @@ jobs:
             fi
           } > "$notes"
 
+          # A manually requested source_sha is a commit of the official
+          # repository, which need not exist in this fork. Tagging it would
+          # fail, so the target is only used when the commit is reachable here.
+          target_args=()
+          if gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA" >/dev/null 2>&1; then
+            target_args=(--target "$SOURCE_SHA")
+          else
+            echo "::warning::$SOURCE_SHA is not present in $GITHUB_REPOSITORY; tagging the default branch."
+          fi
+
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$notes" --prerelease
           else
-            if ! gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$title" --notes-file "$notes" --prerelease; then
+            if ! gh release create "$tag" --repo "$GITHUB_REPOSITORY" "${target_args[@]}" --title "$title" --notes-file "$notes" --prerelease; then
               # The other variant can create the shared release concurrently.
               sleep 5
               gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
@@ -872,18 +919,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   no_profile_succeeded:
-    name: Fail when reliable build failed
+    name: Fail when every profile failed
     needs:
-      - gate
       - source
       - prepare_dependencies
+      - release_ninja_lto
       - release_ninja_p2
     if: >-
       ${{
         always() &&
-        needs.gate.result == 'success' &&
         needs.source.result == 'success' &&
         needs.prepare_dependencies.result == 'success' &&
+        needs.release_ninja_lto.outputs.built != 'true' &&
         needs.release_ninja_p2.outputs.built != 'true'
       }}
     runs-on: ubuntu-latest
@@ -892,15 +939,15 @@ jobs:
     steps:
       - name: Report build failure
         run: |
-          echo "::error::Reliable Ninja profile failed."
+          echo "::error::Both the LTO profile and the no-LTO fallback failed."
           exit 1
 
   final_result:
     name: Require a published release
     needs:
-      - gate
       - source
       - prepare_dependencies
+      - release_ninja_lto
       - release_ninja_p2
       - publish_release
       - no_profile_succeeded
@@ -912,30 +959,35 @@ jobs:
       - name: Verify mandatory workflow result
         shell: bash
         env:
-          GATE_RESULT: ${{ needs.gate.result }}
           SOURCE_RESULT: ${{ needs.source.result }}
           DEPENDENCIES_RESULT: ${{ needs.prepare_dependencies.result }}
-          BUILD_RESULT: ${{ needs.release_ninja_p2.result }}
-          BUILT_PACKAGE: ${{ needs.release_ninja_p2.outputs.built }}
+          LTO_BUILT: ${{ needs.release_ninja_lto.outputs.built }}
+          FALLBACK_BUILT: ${{ needs.release_ninja_p2.outputs.built }}
           PUBLISH_RESULT: ${{ needs.publish_release.result }}
         run: |
           set -euo pipefail
 
-          if [[ "$GATE_RESULT" != "success" \
-            || "$SOURCE_RESULT" != "success" \
+          built_package=false
+          if [[ "$LTO_BUILT" == "true" || "$FALLBACK_BUILT" == "true" ]]; then
+            built_package=true
+          fi
+
+          if [[ "$SOURCE_RESULT" != "success" \
             || "$DEPENDENCIES_RESULT" != "success" \
-            || "$BUILD_RESULT" != "success" \
-            || "$BUILT_PACKAGE" != "true" \
+            || "$built_package" != "true" \
             || "$PUBLISH_RESULT" != "success" ]]; then
             echo "::error::The workflow did not build and publish a verified package."
             printf '%s\n' \
-              "gate=$GATE_RESULT" \
               "source=$SOURCE_RESULT" \
               "dependencies=$DEPENDENCIES_RESULT" \
-              "build=$BUILD_RESULT" \
-              "built_package=$BUILT_PACKAGE" \
+              "lto_built=$LTO_BUILT" \
+              "fallback_built=$FALLBACK_BUILT" \
               "publish=$PUBLISH_RESULT"
             exit 1
           fi
 
-          echo "A verified package was built and published."
+          if [[ "$LTO_BUILT" == "true" ]]; then
+            echo "Published the interprocedurally optimized package."
+          else
+            echo "::warning::The LTO profile failed; published the no-LTO fallback."
+          fi

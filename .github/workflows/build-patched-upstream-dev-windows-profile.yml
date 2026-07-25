@@ -98,7 +98,9 @@ jobs:
         if: ${{ inputs.variant == 'patched' }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: mtproto-patches
+          # Pin to the exact commit that started this run. A floating branch
+          # ref would let a re-run mix new patches with an old workflow file.
+          ref: ${{ github.sha }}
           fetch-depth: 1
           path: patch-source
 
@@ -639,6 +641,16 @@ jobs:
 
           $ErrorActionPreference = "Stop"
 
+      # link.exe /LTCG holds the whole program in memory. The runner has 16 GiB
+      # of RAM, which is not enough on its own, so back the link with swap
+      # instead of lowering the compile parallelism.
+      - name: Enlarge the pagefile for the link step
+        uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
+        with:
+          minimum-size: 16GB
+          maximum-size: 32GB
+          disk-root: "C:"
+
       - name: Configure NuGet sources
         run: |
           nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
@@ -718,6 +730,13 @@ jobs:
       - name: Enable shared MSVC compiler cache
         uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.10
 
+      - name: Reset compiler cache counters
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          sccache --zero-stats
+          exit 0
+
       - name: Configure and build selected profile
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{ inputs.parallel }}
@@ -726,8 +745,12 @@ jobs:
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
 
+          rem CMAKE_EXE_LINKER_FLAGS (without the config suffix) would replace
+          rem the flags CMake computes for every configuration, so the LTCG
+          rem thread limit is attached to the Release configuration only.
           set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF"
-          if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2"
+          if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS_RELEASE=/CGTHREADS:2"
+
           set "MTPROTO_TEST_FLAGS="
           rem Test code is enabled only for the first verification link.
           rem The same build tree is then reconfigured with the option OFF
@@ -763,6 +786,10 @@ jobs:
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
               -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
+              -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob3 /Gy /Gw /DNDEBUG" ^
+              -D CMAKE_JOB_POOLS=compile=%BUILD_PARALLEL%;link=1 ^
+              -D CMAKE_JOB_POOL_COMPILE=compile ^
+              -D CMAKE_JOB_POOL_LINK=link ^
               -D CMAKE_C_COMPILER_LAUNCHER=sccache ^
               -D CMAKE_CXX_COMPILER_LAUNCHER=sccache ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
@@ -777,47 +804,23 @@ jobs:
           rem Compile every translation unit changed by the patch first. This
           rem exposes patch-specific type errors before the full Telegram target,
           rem while the resulting objects and PCH files remain reusable below.
+          rem One ninja invocation for all of them: separate invocations forced
+          rem these translation units to compile strictly one after another.
           if /I "%BUILD_VARIANT%"=="patched" if /I "%BUILD_GENERATOR%"=="ninja" (
             ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/boxes/connection_box.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/core_settings_proxy.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/proxy_rotation_manager.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_resolving.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/details/mtproto_tls_socket.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/mtp_instance.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/mtproto_proxy_data.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/proxy_check.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/application.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_tcp.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/session_private.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu_helpers.cpp.obj
-            if errorlevel 1 exit /b 1
-            ninja -C ..\out -f build-Release.ninja -j %BUILD_PARALLEL% ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/boxes/connection_box.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/core_settings_proxy.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/proxy_rotation_manager.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_resolving.cpp.obj ^
+              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/details/mtproto_tls_socket.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/mtp_instance.cpp.obj ^
+              Telegram/CMakeFiles/td_mtproto.dir/Release/SourceFiles/mtproto/mtproto_proxy_data.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/proxy_check.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/core/application.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/connection_tcp.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/session_private.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu_helpers.cpp.obj ^
               Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/main.cpp.obj
             if errorlevel 1 exit /b 1
           )
@@ -856,6 +859,32 @@ jobs:
               "exit 1 }}"
             if errorlevel 1 exit /b 1
           )
+
+      # A silently broken cache backend degrades sccache into a slow
+      # pass-through, so the hit rate and the non-cacheable reasons are
+      # reported on every run instead of being assumed.
+      - name: Report compiler cache effectiveness
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          $stats = (sccache --show-stats | Out-String).TrimEnd()
+          Write-Host $stats
+
+          @(
+            "## Compiler cache (sccache)"
+            ""
+            '```'
+            $stats
+            '```'
+          ) |
+            Out-File `
+              -FilePath $env:GITHUB_STEP_SUMMARY `
+              -Encoding utf8 `
+              -Append
+
+          exit 0
 
       - name: Collect executable and build metadata
         shell: pwsh
