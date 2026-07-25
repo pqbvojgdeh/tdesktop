@@ -26,3 +26,4 @@
 0026-proxy-rotation-scoring-and-timeout-budget-hardening.diff
 0027-proxy-check-lifecycle-and-ui-localization-hardening.diff
 0028-msvc-proxy-check-coordinator-build-fix.diff
+0029-self-contained-tls-socket-header.diff

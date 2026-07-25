@@ -213,6 +213,7 @@ jobs:
           grep -Fq 'target_compile_definitions(td_mtproto PRIVATE' "$cmake_root"
           grep -Fq '#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS' "$tls"
           grep -Fq '#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS' "$tls_header"
+          grep -Fq '#include <QtNetwork/QTcpSocket>' "$tls_header"
           grep -Fq 'Invalid proxy settings extension ignored.' "$settings_proxy"
           grep -Fq 'return MTP::ProxyData::CHelloType::RANDOM;' "$settings_proxy"
           grep -Fq 'std::chrono::ceil<Lifetime>' "$resumption"
