@@ -1,19 +1,375 @@
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_chromium_resumption_cache.h b/Telegram/SourceFiles/mtproto/details/mtproto_chromium_resumption_cache.h
+new file mode 100644
+index 0000000..1c3a407
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_chromium_resumption_cache.h
+@@ -0,0 +1,139 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <algorithm>
++#include <chrono>
++#include <cstddef>
++#include <iterator>
++#include <map>
++#include <mutex>
++#include <utility>
++#include <vector>
++
++namespace MTP::details {
++
++template <typename Key>
++class ChromiumResumptionCache final {
++public:
++	using Clock = std::chrono::steady_clock;
++	using TimePoint = Clock::time_point;
++	using Lifetime = std::chrono::minutes;
++	struct TakeResult {
++		bool taken = false;
++		Lifetime maximumRemaining = Lifetime(0);
++	};
++
++	ChromiumResumptionCache(std::size_t maximumEntries, int resumptionSlots)
++	: _maximumEntries(maximumEntries)
++	, _resumptionSlots(std::max(resumptionSlots, 0)) {
++	}
++
++	[[nodiscard]] bool take(const Key &key, TimePoint now = Clock::now()) {
++		return takeWithRemaining(key, now).taken;
++	}
++
++	[[nodiscard]] TakeResult takeWithRemaining(
++			const Key &key,
++			TimePoint now = Clock::now()) {
++		const auto lock = std::lock_guard(_mutex);
++		prune(now);
++		const auto i = _entries.find(key);
++		if (i == end(_entries)) {
++			return {};
++		}
++		i->second.pop_back();
++		if (i->second.empty()) {
++			_entries.erase(i);
++			return { true, Lifetime(0) };
++		}
++		const auto expiry = *std::max_element(
++			begin(i->second),
++			end(i->second));
++		return {
++			true,
++			std::chrono::ceil<Lifetime>(expiry - now),
++		};
++	}
++
++	template <typename LifetimeGenerator>
++	[[nodiscard]] Lifetime confirm(
++			const Key &key,
++			LifetimeGenerator &&generateLifetime,
++			TimePoint now = Clock::now()) {
++		const auto lock = std::lock_guard(_mutex);
++		prune(now);
++		if (!_maximumEntries || !_resumptionSlots) {
++			return Lifetime(0);
++		}
++		if (!_entries.contains(key) && _entries.size() >= _maximumEntries) {
++			eraseEarliestExpiring();
++		}
++		auto slots = std::vector<TimePoint>();
++		slots.reserve(static_cast<std::size_t>(_resumptionSlots));
++		auto longest = Lifetime(0);
++		for (auto slot = 0; slot != _resumptionSlots; ++slot) {
++			const auto lifetime = std::max(
++				Lifetime(1),
++				Lifetime(generateLifetime()));
++			slots.push_back(now + lifetime);
++			longest = std::max(longest, lifetime);
++		}
++		_entries.insert_or_assign(key, std::move(slots));
++		return longest;
++	}
++
++	[[nodiscard]] std::size_t slotCount(
++			const Key &key,
++			TimePoint now = Clock::now()) {
++		const auto lock = std::lock_guard(_mutex);
++		prune(now);
++		const auto i = _entries.find(key);
++		return (i == end(_entries)) ? 0 : i->second.size();
++	}
++
++private:
++	using Slots = std::vector<TimePoint>;
++
++	void prune(TimePoint now) {
++		for (auto i = _entries.begin(); i != _entries.end();) {
++			auto &slots = i->second;
++			slots.erase(
++				std::remove_if(
++					begin(slots),
++					end(slots),
++					[=](TimePoint expiry) { return expiry <= now; }),
++				end(slots));
++			i = slots.empty() ? _entries.erase(i) : std::next(i);
++		}
++	}
++
++	void eraseEarliestExpiring() {
++		const auto maximumExpiry = [](const Slots &slots) {
++			return slots.empty()
++				? TimePoint::min()
++				: *std::max_element(begin(slots), end(slots));
++		};
++		const auto oldest = std::min_element(
++			begin(_entries),
++			end(_entries),
++			[&](const auto &a, const auto &b) {
++				return maximumExpiry(a.second) < maximumExpiry(b.second);
++			});
++		if (oldest != end(_entries)) {
++			_entries.erase(oldest);
++		}
++	}
++
++	const std::size_t _maximumEntries;
++	const int _resumptionSlots;
++	std::mutex _mutex;
++	std::map<Key, Slots> _entries;
++};
++
++} // namespace MTP::details
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
+new file mode 100644
+index 0000000..eb86de9
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_client_hello_validation.h
+@@ -0,0 +1,202 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <span>
++
++namespace MTP::details {
++
++struct ClientHelloValidation {
++	bool valid = false;
++	bool resumed = false;
++	bool hasKeyShare = false;
++	bool hasP256KeyShare = false;
++};
++
++[[nodiscard]] inline ClientHelloValidation ValidateClientHello(
++		std::span<const std::byte> data,
++		int expectResumed) {
++	const auto byte = [&](std::size_t offset) -> std::size_t {
++		return std::to_integer<std::uint8_t>(data[offset]);
++	};
++	const auto u16 = [&](std::size_t offset) -> std::size_t {
++		return (byte(offset) << 8) | byte(offset + 1);
++	};
++	const auto u24 = [&](std::size_t offset) -> std::size_t {
++		return (byte(offset) << 16)
++			| (byte(offset + 1) << 8)
++			| byte(offset + 2);
++	};
++	const auto available = [&](std::size_t offset, std::size_t length) {
++		return offset <= data.size() && length <= data.size() - offset;
++	};
++	const auto grease = [](std::size_t value) {
++		return ((value >> 8) == (value & 0xFF))
++			&& ((value & 0x0F) == 0x0A);
++	};
++
++	auto result = ClientHelloValidation();
++	if (!available(0, 9)
++		|| byte(0) != 0x16
++		|| byte(1) != 0x03
++		|| byte(2) != 0x01
++		|| u16(3) != data.size() - 5
++		|| byte(5) != 0x01
++		|| u24(6) != data.size() - 9) {
++		return result;
++	}
++
++	auto offset = std::size_t(9);
++	if (!available(offset, 35)) {
++		return result;
++	}
++	offset += 34;
++	const auto sessionIdLength = byte(offset++);
++	if (!available(offset, sessionIdLength + 2)) {
++		return result;
++	}
++	offset += sessionIdLength;
++	const auto cipherLength = std::size_t(u16(offset));
++	offset += 2;
++	if (!cipherLength || (cipherLength % 2) || !available(offset, cipherLength + 1)) {
++		return result;
++	}
++	offset += cipherLength;
++	const auto compressionLength = byte(offset++);
++	if (!compressionLength || !available(offset, compressionLength + 2)) {
++		return result;
++	}
++	offset += compressionLength;
++	const auto extensionsLength = std::size_t(u16(offset));
++	offset += 2;
++	if (!available(offset, extensionsLength) || offset + extensionsLength != data.size()) {
++		return result;
++	}
++
++	const auto extensionsEnd = offset + extensionsLength;
++	auto sawKeyShare = false;
++	auto sawPsk = false;
++	auto sawPskModes = false;
++	while (offset < extensionsEnd) {
++		if (!available(offset, 4)) {
++			return result;
++		}
++		const auto type = u16(offset);
++		const auto length = std::size_t(u16(offset + 2));
++		offset += 4;
++		if (!available(offset, length) || offset + length > extensionsEnd) {
++			return result;
++		}
++		const auto extensionEnd = offset + length;
++		if (type == 0x0033) {
++			if (sawKeyShare || length < 2 || u16(offset) != length - 2) {
++				return result;
++			}
++			sawKeyShare = true;
++			auto share = offset + 2;
++			auto shareCount = 0;
++			while (share < extensionEnd) {
++				if (share + 4 > extensionEnd) {
++					return result;
++				}
++				const auto group = u16(share);
++				const auto shareLength = std::size_t(u16(share + 2));
++				share += 4;
++				if (!shareLength || share + shareLength > extensionEnd) {
++					return result;
++				}
++				if ((group == 0x001D && shareLength != 32)
++					|| (group == 0x11EC && shareLength != 1216)
++					|| (group == 0x0017
++						&& (shareLength != 65 || byte(share) != 0x04))
++					|| (!grease(group)
++						&& group != 0x001D
++						&& group != 0x11EC
++						&& group != 0x0017)) {
++					return result;
++				}
++				result.hasP256KeyShare |= (group == 0x0017);
++				share += shareLength;
++				++shareCount;
++			}
++			if (!shareCount) {
++				return result;
++			}
++			result.hasKeyShare = true;
++		} else if (type == 0x002D) {
++			if (sawPskModes
++				|| length < 2
++				|| byte(offset) != length - 1) {
++				return result;
++			}
++			sawPskModes = true;
++			auto supportsDhe = false;
++			for (auto i = offset + 1; i != extensionEnd; ++i) {
++				supportsDhe |= (byte(i) == 0x01);
++			}
++			if (!supportsDhe) {
++				return result;
++			}
++		} else if (type == 0x0029) {
++			if (sawPsk
++				|| extensionEnd != extensionsEnd
++				|| length < 7) {
++				return result;
++			}
++			sawPsk = true;
++			auto item = offset;
++			auto identityCount = 0;
++			const auto identitiesLength = std::size_t(u16(item));
++			item += 2;
++			const auto identitiesEnd = item + identitiesLength;
++			if (identitiesLength < 6 || identitiesEnd + 2 > extensionEnd) {
++				return result;
++			}
++			while (item < identitiesEnd) {
++				if (item + 2 > identitiesEnd) {
++					return result;
++				}
++				const auto identityLength = std::size_t(u16(item));
++				item += 2;
++				if (!identityLength || item + identityLength + 4 > identitiesEnd) {
++					return result;
++				}
++				item += identityLength + 4;
++				++identityCount;
++			}
++			const auto bindersLength = std::size_t(u16(item));
++			item += 2;
++			if (!bindersLength || item + bindersLength != extensionEnd) {
++				return result;
++			}
++			const auto bindersEnd = extensionEnd;
++			auto binderCount = 0;
++			while (item < bindersEnd) {
++				const auto binderLength = byte(item++);
++				if (!binderLength || item + binderLength > bindersEnd) {
++					return result;
++				}
++				item += binderLength;
++				++binderCount;
++			}
++			if (identityCount != binderCount) {
++				return result;
++			}
++			result.resumed = true;
++		}
++		offset = extensionEnd;
++	}
++	result.valid = result.hasKeyShare
++		&& (!result.resumed || sawPskModes)
++		&& (expectResumed < 0 || result.resumed == bool(expectResumed));
++	return result;
++}
++
++} // namespace MTP::details
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-index 448190a556..36b6117c78 100644
+index 448190a..d0c1f95 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
-@@ -7,36 +7,986 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,36 +7,1015 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "mtproto/details/mtproto_tls_socket.h"
  
 +#include "mtproto/details/mtproto_client_hello_validation.h"
-+#include "mtproto/details/mtproto_chromium_session_cache.h"
++#include "mtproto/details/mtproto_fake_tls_policy.h"
++#include "mtproto/details/mtproto_slow_connect_policy.h"
++#include "mtproto/details/mtproto_chromium_resumption_cache.h"
 +
  #include "mtproto/details/mtproto_tcp_socket.h"
 +#include "mtproto/mtproto_proxy_data.h"
  #include "base/openssl_help.h"
  #include "base/bytes.h"
  #include "base/invoke_queued.h"
++#include "base/platform/base_platform_info.h"
  #include "base/random.h"
  #include "base/unixtime.h"
 +#include <atomic>
@@ -22,10 +378,12 @@ index 448190a556..36b6117c78 100644
 +#include <map>
 +#include <memory>
 +#include <tuple>
++#include <vector>
 +
 +#include <openssl/core_names.h>
 +
 +#include <QtCore/QtEndian>
++#include <QtCore/QLocale>
 +#include <QtCore/QMutex>
 +#include <QtCore/QRandomGenerator>
 +#include <QtCore/QTimer>
@@ -36,8 +394,9 @@ index 448190a556..36b6117c78 100644
 +
 +constexpr auto kMaxGrease = 8;
 +constexpr auto kClientHelloLimit = 4096;
-+constexpr auto kMaximumDelayedConnect = std::chrono::milliseconds(7500);
-+constexpr auto kMaximumPendingDelayedConnects = 16;
++constexpr auto kMaximumDelayedConnect = std::chrono::milliseconds(
++	kSlowConnectMaximumAdditionalDelayMs);
++constexpr auto kMaximumPendingDelayedConnects = kSlowConnectMaximumPending;
 +constexpr auto kHelloDigestLength = 32;
 +constexpr auto kLengthSize = sizeof(uint16);
 +constexpr auto kMaxServerHelloLength = 65536;
@@ -109,6 +468,15 @@ index 448190a556..36b6117c78 100644
 +		int delay,
 +		int jitter) {
 +	auto result = SlowConnectSchedule();
++	const auto policy = NormalizeSlowConnectPolicy(delay, jitter);
++	delay = policy.delay;
++	jitter = policy.jitter;
++	const auto overflowDelay = [] {
++		return sc::milliseconds(NormalizeSlowConnectOverflowDelay(
++			QRandomGenerator::global()->bounded(
++				kSlowConnectOverflowMinimumDelayMs,
++				kSlowConnectOverflowMaximumDelayMs + 1)));
++	};
 +	const QMutexLocker lock(&SlowConnectMutex());
 +	auto &slots = SlowConnectSlots();
 +	const auto now = sc::steady_clock::now();
@@ -116,6 +484,24 @@ index 448190a556..36b6117c78 100644
 +		i = (i->second.pending == 0 && i->second.next <= now)
 +			? slots.erase(i)
 +			: std::next(i);
++	}
++	if (!slots.contains(endpoint)
++		&& slots.size() >= kSlowConnectMaximumSlots) {
++		const auto removable = std::min_element(
++			begin(slots),
++			end(slots),
++			[](const auto &a, const auto &b) {
++				if (a.second.pending != b.second.pending) {
++					return a.second.pending < b.second.pending;
++				}
++				return a.second.next < b.second.next;
++			});
++		if (removable == end(slots) || removable->second.pending != 0) {
++			result.overflow = true;
++			result.waitFor = overflowDelay();
++			return result;
++		}
++		slots.erase(removable);
 +	}
 +	const auto extra = jitter
 +		? QRandomGenerator::global()->bounded(jitter + 1)
@@ -145,10 +531,14 @@ index 448190a556..36b6117c78 100644
 +			result.reservation = std::make_shared<SlowConnectReservation>(
 +				endpoint);
 +		}
++	} else {
++		// Do not turn local scheduler pressure into a simultaneous TCP burst.
++		result.waitFor = overflowDelay();
 +	}
 +	return result;
 +}
 +
++#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
 +[[nodiscard]] bool ValidateSlowConnectReservationForTests() {
 +	const auto endpoint = SlowConnectEndpoint(
 +		u"slow-connect-reservation-test.invalid"_q,
@@ -167,6 +557,7 @@ index 448190a556..36b6117c78 100644
 +	const QMutexLocker lock(&SlowConnectMutex());
 +	return !SlowConnectSlots().contains(endpoint);
 +}
++#endif // DESKTOP_APP_MTPROTO_PROFILE_TESTS
 +
 +using BigNum = openssl::BigNum;
 +using BigNumContext = openssl::Context;
@@ -806,9 +1197,6 @@ index 448190a556..36b6117c78 100644
 +		Expects(stack.size() > 1);
 +		Expects(v::is<Scope>(stack.back()));
 +
--
--#include <QtCore/QtEndian>
--#include <range/v3/algorithm/reverse.hpp>
 +		const auto blocks = std::move(v::get<Scope>(stack.back()));
 +		stack.pop_back();
 +		pushToBack(MTP_tlsBlockScope(MTP_vector<MTPTlsBlock>(blocks)));
@@ -819,14 +1207,19 @@ index 448190a556..36b6117c78 100644
 +	const auto ClosePermutation = [&] {
 +		Expects(stack.size() > 1);
 +		Expects(v::is<Permutation>(stack.back()));
-+
--
--namespace MTP::details {
--namespace {
+ 
+-#include <QtCore/QtEndian>
+-#include <range/v3/algorithm/reverse.hpp>
 +		const auto list = std::move(v::get<Permutation>(stack.back()));
 +		stack.pop_back();
-+
--
+ 
+-namespace MTP::details {
+-namespace {
++		const auto wrapped = list | ranges::views::transform([](
++				const QVector<MTPTlsBlock> &elements) {
++			return MTP_vector<MTPTlsBlock>(elements);
++		}) | ranges::to<QVector<MTPVector<MTPTlsBlock>>>();
+ 
 -constexpr auto kMaxGrease = 8;
 -constexpr auto kClientHelloLimit = 2048;
 -constexpr auto kHelloDigestLength = 32;
@@ -839,21 +1232,15 @@ index 448190a556..36b6117c78 100644
 -constexpr auto kClientPartSize = 2878;
 -const auto kClientPrefix = qstr("\x14\x03\x03\x00\x01\x01");
 -const auto kClientHeader = qstr("\x17\x03\x03");
-+		const auto wrapped = list | ranges::views::transform([](
-+				const QVector<MTPTlsBlock> &elements) {
-+			return MTP_vector<MTPTlsBlock>(elements);
-+		}) | ranges::to<QVector<MTPVector<MTPTlsBlock>>>();
-+
--
--using BigNum = openssl::BigNum;
--using BigNumContext = openssl::Context;
 +		pushToBack(MTP_tlsBlockPermutation(
 +			MTP_vector<MTPVector<MTPTlsBlock>>(wrapped)));
 +	};
 +	const auto StartPermutationElement = [&] {
 +		Expects(stack.size() > 1);
 +		Expects(v::is<Permutation>(stack.back()));
-+
+ 
+-using BigNum = openssl::BigNum;
+-using BigNumContext = openssl::Context;
 +		v::get<Permutation>(stack.back()).emplace_back();
 +	};
 +	const auto Finish = [&] {
@@ -991,15 +1378,6 @@ index 448190a556..36b6117c78 100644
 +	} ClosePermutation();
 +	G(3);
 +	S("\x00\x01\x00"_q);
-+	// pre-shared key
-+	S("\x00\x29\x00\x94"_q);
-+	S("\x00\x6f"_q);
-+	S("\x00\x69"_q);
-+	R(105);
-+	R(4);
-+	S("\x00\x21"_q);
-+	S("\x20"_q);
-+	R(32);
 +	CloseScope();
 +	CloseScope();
 +	CloseScope();
@@ -1012,7 +1390,7 @@ index 448190a556..36b6117c78 100644
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
-@@ -76,9 +1026,6 @@ using BigNumContext = openssl::Context;
+@@ -76,9 +1055,6 @@ using BigNumContext = openssl::Context;
  	const auto E = [&] {
  		pushToBack(MTP_tlsBlockE());
  	};
@@ -1022,7 +1400,7 @@ index 448190a556..36b6117c78 100644
  	const auto OpenScope = [&] {
  		stack.emplace_back(Scope());
  	};
-@@ -135,8 +1082,9 @@ using BigNumContext = openssl::Context;
+@@ -135,8 +1111,9 @@ using BigNumContext = openssl::Context;
  	G(0);
  	S(""
  		"\x13\x01\x13\x02\x13\x03\xc0\x2b\xc0\x2f\xc0\x2c\xc0\x30\xcc\xa9"
@@ -1033,7 +1411,7 @@ index 448190a556..36b6117c78 100644
  	OpenScope();
  	G(2);
  	S("\x00\x00"_q);
-@@ -165,8 +1113,8 @@ using BigNumContext = openssl::Context;
+@@ -165,8 +1142,8 @@ using BigNumContext = openssl::Context;
  		}
  		StartPermutationElement(); {
  			S(""
@@ -1044,7 +1422,7 @@ index 448190a556..36b6117c78 100644
  		}
  		StartPermutationElement(); {
  			S(""
-@@ -223,7 +1171,19 @@ using BigNumContext = openssl::Context;
+@@ -223,7 +1200,19 @@ using BigNumContext = openssl::Context;
  	} ClosePermutation();
  	G(3);
  	S("\x00\x01\x00"_q);
@@ -1065,7 +1443,7 @@ index 448190a556..36b6117c78 100644
  	CloseScope();
  	CloseScope();
  	CloseScope();
-@@ -231,6 +1191,136 @@ using BigNumContext = openssl::Context;
+@@ -231,6 +1220,148 @@ using BigNumContext = openssl::Context;
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
@@ -1087,14 +1465,14 @@ index 448190a556..36b6117c78 100644
 +
 +constexpr auto kMaximumChromium150EndpointStates = 128;
 +constexpr auto kChromium150TicketSlots = 2;
-+auto Chromium150Sessions = MTP::details::ChromiumSessionCache<
++auto Chromium150Resumption = MTP::details::ChromiumResumptionCache<
 +	Chromium150EndpointKey>(
 +		kMaximumChromium150EndpointStates,
 +		kChromium150TicketSlots);
 +
-+[[nodiscard]] auto TakeChromium150Ticket(
++[[nodiscard]] auto TakeChromium150Resumption(
 +		const Chromium150EndpointKey &key) {
-+	return Chromium150Sessions.takeWithRemaining(key);
++	return Chromium150Resumption.takeWithRemaining(key);
 +}
 +
 +void ConfirmClientHello(
@@ -1107,7 +1485,7 @@ index 448190a556..36b6117c78 100644
 +	auto ttlMinutes = 0;
 +	if (actual == ProxyData::CHelloType::Chromium150) {
 +		const auto key = Chromium150EndpointKey(address, port, domain);
-+		ttlMinutes = int(Chromium150Sessions.confirm(key, [] {
++		ttlMinutes = int(Chromium150Resumption.confirm(key, [] {
 +			return std::chrono::minutes(
 +				30 + QRandomGenerator::global()->bounded(31));
 +		}).count());
@@ -1128,6 +1506,27 @@ index 448190a556..36b6117c78 100644
 +	ProxyData::setGlobalCHelloStatus(status);
 +}
 +
++[[nodiscard]] ProxyData::CHelloType StickyRandomClientHelloType() {
++	static const auto result = [] {
++		auto profiles = std::vector{
++			ProxyData::CHelloType::Firefox,
++			ProxyData::CHelloType::Chrome,
++			ProxyData::CHelloType::Custom,
++			ProxyData::CHelloType::Chromium150,
++		};
++		if constexpr (Platform::IsMac()) {
++			profiles.push_back(ProxyData::CHelloType::SafariMac);
++		}
++		if (QLocale::system().language() == QLocale::Russian) {
++			profiles.push_back(ProxyData::CHelloType::YandexGost);
++		}
++		Assert(!profiles.empty());
++		return profiles[QRandomGenerator::global()->bounded(
++			int(profiles.size()))];
++	}();
++	return result;
++}
++
 +[[nodiscard]] ClientHelloSelection PrepareClientHelloRules(
 +		const QString &address,
 +		int port,
@@ -1142,16 +1541,7 @@ index 448190a556..36b6117c78 100644
 +	const auto configured_ch_type = MTP::ProxyData::globalClientHelloRulesType();
 +	auto ch_type = configured_ch_type;
 +	if (ProxyData::CHelloType::RANDOM == ch_type) {
-+		constexpr auto kRandomProfiles = std::array{
-+			ProxyData::CHelloType::Firefox,
-+			ProxyData::CHelloType::Chrome,
-+			ProxyData::CHelloType::Custom,
-+			ProxyData::CHelloType::SafariMac,
-+			ProxyData::CHelloType::YandexGost,
-+			ProxyData::CHelloType::Chromium150,
-+		};
-+		ch_type = kRandomProfiles[QRandomGenerator::global()->bounded(
-+			int(kRandomProfiles.size()))];
++		ch_type = StickyRandomClientHelloType();
 +	}
 +	const auto result = [&](
 +			const MTPTlsClientHello &rules,
@@ -1176,21 +1566,21 @@ index 448190a556..36b6117c78 100644
 +		case ProxyData::CHelloType::YandexGost:
 +			return result(chRules_yandex, ch_type);
 +		case ProxyData::CHelloType::Chromium150: {
-+			const auto ticket = TakeChromium150Ticket(
++			const auto resumption = TakeChromium150Resumption(
 +				Chromium150EndpointKey(address, port, domain));
-+			if (ticket.taken) {
++			if (resumption.taken) {
 +				ProxyData::updateGlobalCHelloStatusLifetime(
 +					address,
 +					port,
 +					ClientHelloDomainId(domain),
-+					int(ticket.maximumRemaining.count()));
++					int(resumption.maximumRemaining.count()));
 +			}
 +			return result(
-+				ticket.taken
++				resumption.taken
 +					? chRules_chromium150Resumed
 +					: chRules_chromium150Fresh,
 +				ch_type,
-+				ticket.taken);
++				resumption.taken);
 +		}
 +		case ProxyData::CHelloType::Firefox:
 +		default:
@@ -1202,7 +1592,7 @@ index 448190a556..36b6117c78 100644
  [[nodiscard]] bytes::vector PrepareGreases() {
  	auto result = bytes::vector(kMaxGrease);
  	bytes::set_random(result);
-@@ -246,8 +1336,8 @@ using BigNumContext = openssl::Context;
+@@ -246,8 +1377,8 @@ using BigNumContext = openssl::Context;
  	return result;
  }
  
@@ -1213,7 +1603,7 @@ index 448190a556..36b6117c78 100644
  	if (!context) {
  		return {};
  	}
-@@ -271,7 +1361,9 @@ using BigNumContext = openssl::Context;
+@@ -271,7 +1402,9 @@ using BigNumContext = openssl::Context;
  	if (!EVP_PKEY_get_raw_public_key(key, nullptr, &length)) {
  		return {};
  	}
@@ -1224,7 +1614,7 @@ index 448190a556..36b6117c78 100644
  
  	auto result = bytes::vector(length);
  	const auto code = EVP_PKEY_get_raw_public_key(
-@@ -281,6 +1373,56 @@ using BigNumContext = openssl::Context;
+@@ -281,6 +1414,56 @@ using BigNumContext = openssl::Context;
  	if (!code) {
  		return {};
  	}
@@ -1281,7 +1671,7 @@ index 448190a556..36b6117c78 100644
  	return result;
  }
  
-@@ -304,7 +1446,7 @@ private:
+@@ -304,7 +1487,7 @@ private:
  			bytes::const_span domain,
  			const bytes::vector &greases);
  
@@ -1290,7 +1680,7 @@ index 448190a556..36b6117c78 100644
  		void writeBlocks(const QVector<MTPTlsBlock> &blocks);
  		void writeBlock(const MTPTlsBlock &data);
  		void writeBlock(const MTPDtlsBlockString &data);
-@@ -313,6 +1455,7 @@ private:
+@@ -313,6 +1496,7 @@ private:
  		void writeBlock(const MTPDtlsBlockRandom &data);
  		void writeBlock(const MTPDtlsBlockDomain &data);
  		void writeBlock(const MTPDtlsBlockPublicKey &data);
@@ -1298,7 +1688,7 @@ index 448190a556..36b6117c78 100644
  		void writeBlock(const MTPDtlsBlockScope &data);
  		void writeBlock(const MTPDtlsBlockPermutation &data);
  		void writeBlock(const MTPDtlsBlockM &data);
-@@ -362,16 +1505,16 @@ QByteArray Generator::Part::take() {
+@@ -362,16 +1546,16 @@ QByteArray Generator::Part::take() {
  	return _error ? QByteArray() : std::move(_result);
  }
  
@@ -1319,7 +1709,7 @@ index 448190a556..36b6117c78 100644
  	return bytes::make_detached_span(_result).subspan(offset);
  }
  
-@@ -411,7 +1554,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
+@@ -411,7 +1595,7 @@ void Generator::Part::writeBlock(const MTPDtlsBlockZero &data) {
  
  void Generator::Part::writeBlock(const MTPDtlsBlockGrease &data) {
  	const auto seed = data.vseed().v;
@@ -1328,7 +1718,7 @@ index 448190a556..36b6117c78 100644
  		_error = true;
  		return;
  	}
-@@ -440,7 +1583,16 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
+@@ -440,7 +1624,16 @@ void Generator::Part::writeBlock(const MTPDtlsBlockDomain &data) {
  }
  
  void Generator::Part::writeBlock(const MTPDtlsBlockPublicKey &data) {
@@ -1346,7 +1736,7 @@ index 448190a556..36b6117c78 100644
  	const auto storage = grow(key.size());
  	if (storage.empty()) {
  		return;
-@@ -494,10 +1646,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
+@@ -494,10 +1687,12 @@ void Generator::Part::writeBlock(const MTPDtlsBlockM &data) {
  	bytes::set_random(random);
  
  	auto chars = reinterpret_cast<char*>(storage.data());
@@ -1362,7 +1752,7 @@ index 448190a556..36b6117c78 100644
  		*chars++ = (char)(a & 255);
  		*chars++ = (char)((a >> 8) + ((b & 15) << 4));
  		*chars++ = (char)(b >> 4);
-@@ -523,7 +1677,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
+@@ -523,7 +1718,8 @@ void Generator::Part::writeBlock(const MTPDtlsBlockPadding &data) {
  void Generator::Part::finalize(bytes::const_span key) {
  	if (_error) {
  		return;
@@ -1372,7 +1762,7 @@ index 448190a556..36b6117c78 100644
  		_error = true;
  		return;
  	}
-@@ -532,7 +1687,8 @@ void Generator::Part::finalize(bytes::const_span key) {
+@@ -532,7 +1728,8 @@ void Generator::Part::finalize(bytes::const_span key) {
  }
  
  QByteArray Generator::Part::extractDigest() const {
@@ -1382,7 +1772,7 @@ index 448190a556..36b6117c78 100644
  		return {};
  	}
  	return _result.mid(_digestPosition, kHelloDigestLength);
-@@ -576,8 +1732,15 @@ ClientHello Generator::take() {
+@@ -576,8 +1773,15 @@ ClientHello Generator::take() {
  [[nodiscard]] ClientHello PrepareClientHello(
  		const MTPTlsClientHello &rules,
  		bytes::const_span domain,
@@ -1400,10 +1790,11 @@ index 448190a556..36b6117c78 100644
  }
  
  [[nodiscard]] bool CheckPart(bytes::const_span data, QLatin1String check) {
-@@ -597,6 +1760,39 @@ ClientHello Generator::take() {
+@@ -597,6 +1801,91 @@ ClientHello Generator::take() {
  
  } // namespace
  
++#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
 +bool ValidateClientHelloProfilesForTests() {
 +	if (!ValidateSlowConnectReservationForTests()) {
 +		return false;
@@ -1412,13 +1803,17 @@ index 448190a556..36b6117c78 100644
 +	const auto key = bytes::vector(16, bytes::type(0x42));
 +	const auto check = [&](const MTPTlsClientHello &rules,
 +			int expectedResumed,
-+			bool expectedP256) {
++			bool expectedP256,
++			QByteArray *sample = nullptr) {
 +		const auto hello = Generator(
 +			rules,
 +			bytes::make_span(domain),
 +			bytes::make_span(key)).take();
 +		if (hello.data.isEmpty() || hello.digest.size() != kHelloDigestLength) {
 +			return false;
++		}
++		if (sample) {
++			*sample = hello.data;
 +		}
 +		const auto validation = ValidateClientHello(
 +			std::span<const std::byte>(
@@ -1428,19 +1823,75 @@ index 448190a556..36b6117c78 100644
 +		return validation.valid
 +			&& validation.hasP256KeyShare == expectedP256;
 +	};
-+	return check(PrepareClientHelloRules_Chrome(), 0, false)
-+		&& check(PrepareClientHelloRules_Firefox(), 0, true)
-+		&& check(PrepareClientHelloRules_Firefox(true), 0, true)
-+		&& check(PrepareClientHelloRules_SafariMac(), 0, false)
-+		&& check(PrepareClientHelloRules_YandexGost(), 1, false)
-+		&& check(PrepareClientHelloRules_Chromium150(false), 0, false)
-+		&& check(PrepareClientHelloRules_Chromium150(true), 1, false);
++	for (auto iteration = 0; iteration != 256; ++iteration) {
++		if (!check(PrepareClientHelloRules_Chrome(), 0, false)
++			|| !check(PrepareClientHelloRules_Firefox(), 0, true)
++			|| !check(PrepareClientHelloRules_Firefox(true), 0, true)
++			|| !check(PrepareClientHelloRules_SafariMac(), 0, false)
++			|| !check(PrepareClientHelloRules_YandexGost(), 0, false)
++			|| !check(PrepareClientHelloRules_Chromium150(false), 0, false)
++			|| !check(PrepareClientHelloRules_Chromium150(true), 1, false)) {
++			return false;
++		}
++	}
++	const auto stickyRandom = StickyRandomClientHelloType();
++	for (auto iteration = 0; iteration != 256; ++iteration) {
++		if (StickyRandomClientHelloType() != stickyRandom) {
++			return false;
++		}
++	}
++	if ((!Platform::IsMac()
++			&& stickyRandom == ProxyData::CHelloType::SafariMac)
++		|| (QLocale::system().language() != QLocale::Russian
++			&& stickyRandom == ProxyData::CHelloType::YandexGost)) {
++		return false;
++	}
++	auto sample = QByteArray();
++	if (!check(PrepareClientHelloRules_Chromium150(true), 1, false, &sample)) {
++		return false;
++	}
++	const auto validateSample = [&](const QByteArray &data, std::size_t size) {
++		return ValidateClientHello(
++			std::span<const std::byte>(
++				reinterpret_cast<const std::byte*>(data.constData()),
++				size),
++			1);
++	};
++	// Every truncated prefix must be rejected. This exercises every boundary
++	// without relying on a crash-only signal from unchecked mutations.
++	for (auto size = std::size_t(0);
++		size != std::size_t(sample.size());
++		++size) {
++		if (validateSample(sample, size).valid) {
++			return false;
++		}
++	}
++	// The TLS record and handshake envelope occupies bytes 0..8. Corrupting
++	// any byte in that envelope must produce a deterministic rejection.
++	for (auto i = 0; i != 9; ++i) {
++		auto mutated = sample;
++		mutated[i] = char(uchar(mutated[i]) ^ uchar(0x5A));
++		if (validateSample(mutated, std::size_t(mutated.size())).valid) {
++			return false;
++		}
++	}
++	return true;
 +}
++#endif // DESKTOP_APP_MTPROTO_PROFILE_TESTS
 +
  TlsSocket::TlsSocket(
  	not_null<QThread*> thread,
  	const bytes::vector &secret,
-@@ -653,11 +1849,25 @@ void TlsSocket::plainConnected() {
+@@ -604,7 +1893,7 @@ TlsSocket::TlsSocket(
+ 	bool protocolForFiles)
+ : AbstractSocket(thread)
+ , _secret(secret) {
+-	Expects(_secret.size() >= 21 && _secret[0] == bytes::type(0xEE));
++	Expects(IsFakeTlsSecret(_secret));
+ 
+ 	_socket.moveToThread(thread);
+ 	_socket.setProxy(proxy);
+@@ -653,11 +1942,25 @@ void TlsSocket::plainConnected() {
  		return;
  	}
  
@@ -1470,7 +1921,7 @@ index 448190a556..36b6117c78 100644
  	if (hello.data.isEmpty()) {
  		logError(888, "Could not generate Client Hello.");
  		_state = State::Error;
-@@ -671,6 +1881,7 @@ void TlsSocket::plainConnected() {
+@@ -671,6 +1974,7 @@ void TlsSocket::plainConnected() {
  
  void TlsSocket::plainDisconnected() {
  	_state = State::NotConnected;
@@ -1478,7 +1929,7 @@ index 448190a556..36b6117c78 100644
  	_incoming = QByteArray();
  	_serverHelloLength = 0;
  	_incomingGoodDataOffset = 0;
-@@ -699,6 +1910,11 @@ void TlsSocket::readHello() {
+@@ -699,6 +2003,11 @@ void TlsSocket::readHello() {
  			return;
  		}
  		_incoming.append(_socket.readAll());
@@ -1490,7 +1941,7 @@ index 448190a556..36b6117c78 100644
  	}
  	checkHelloParts12(parts1Size);
  }
-@@ -794,6 +2010,19 @@ void TlsSocket::checkHelloDigest() {
+@@ -794,6 +2103,19 @@ void TlsSocket::checkHelloDigest() {
  	}
  	_incomingGoodDataOffset = _incomingGoodDataLimit = 0;
  	_state = State::Connected;
@@ -1510,7 +1961,7 @@ index 448190a556..36b6117c78 100644
  	_connected.fire({});
  }
  
-@@ -854,6 +2083,31 @@ void TlsSocket::connectToHost(const QString &address, int port) {
+@@ -854,6 +2176,37 @@ void TlsSocket::connectToHost(const QString &address, int port) {
  	Expects(_state == State::NotConnected);
  
  	_state = State::Connecting;
@@ -1522,9 +1973,15 @@ index 448190a556..36b6117c78 100644
 +		const auto endpoint = SlowConnectEndpoint(address, port);
 +		const auto schedule = ReserveSlowConnect(endpoint, delay, jitter);
 +		if (schedule.overflow) {
-+			// Local queue pressure is not a network failure. Connect now instead
-+			// of reporting an error that could quarantine a healthy proxy IP.
-+			_socket.connectToHost(address, port);
++			// Local queue pressure is not a network failure, but connecting
++			// immediately would recreate the burst this scheduler prevents.
++			const auto _address = address;
++			const auto _port = port;
++			QTimer::singleShot(int(schedule.waitFor.count()), this, [=] {
++				if (_state == State::Connecting) {
++					_socket.connectToHost(_address, _port);
++				}
++			});
 +			return;
 +		}
 +		if (schedule.waitFor.count() > 0) {
@@ -1542,7 +1999,7 @@ index 448190a556..36b6117c78 100644
  	_socket.connectToHost(address, port);
  }
  
-@@ -954,6 +2212,7 @@ void TlsSocket::handleError(int errorCode) {
+@@ -954,6 +2307,7 @@ void TlsSocket::handleError(int errorCode) {
  		logError(errorCode, _socket.errorString());
  	}
  	_state = State::Error;
@@ -1551,19 +2008,25 @@ index 448190a556..36b6117c78 100644
  }
  
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index d4a90083ea..27d18ba6dc 100644
+index d4a9008..f17fbe0 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -9,8 +9,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  
+ #include "mtproto/details/mtproto_abstract_socket.h"
+ 
++#include <QtNetwork/QTcpSocket>
++
  namespace MTP::details {
  
++#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
 +[[nodiscard]] bool ValidateClientHelloProfilesForTests();
++#endif
 +
  class TlsSocket final : public AbstractSocket {
  public:
  	TlsSocket(
-@@ -57,11 +59,17 @@ private:
+@@ -57,11 +63,17 @@ private:
  
  	const bytes::vector _secret;
  	QTcpSocket _socket;
@@ -1582,7 +2045,7 @@ index d4a90083ea..27d18ba6dc 100644
  };
  
 diff --git a/Telegram/SourceFiles/mtproto/scheme/mtproto.tl b/Telegram/SourceFiles/mtproto/scheme/mtproto.tl
-index 76225965bf..d290433068 100644
+index 7622596..d290433 100644
 --- a/Telegram/SourceFiles/mtproto/scheme/mtproto.tl
 +++ b/Telegram/SourceFiles/mtproto/scheme/mtproto.tl
 @@ -110,6 +110,7 @@ tlsBlockZero length:int = TlsBlock;
@@ -1594,7 +2057,7 @@ index 76225965bf..d290433068 100644
  tlsBlockPermutation entries:Vector<Vector<TlsBlock>> = TlsBlock;
  tlsBlockM = TlsBlock;
 diff --git a/Telegram/cmake/td_mtproto.cmake b/Telegram/cmake/td_mtproto.cmake
-index 79a0a3c76f..668c70f7a3 100644
+index 79a0a3c..668c70f 100644
 --- a/Telegram/cmake/td_mtproto.cmake
 +++ b/Telegram/cmake/td_mtproto.cmake
 @@ -31,6 +31,7 @@ PRIVATE

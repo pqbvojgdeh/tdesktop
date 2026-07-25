@@ -10,9 +10,11 @@ int main() {
 	static_assert(kProxySettingsLegacyExtensionVersion == 1);
 	static_assert(kProxySettingsExtensionVersion == 2);
 	static_assert(kProxySettingsExtensionFieldCount == 5);
+	static_assert(kProxySettingsRandomClientHelloType == -1);
+	static_assert(kProxySettingsMaximumClientHelloType == 5);
 
 	const auto valid = ProxySettingsExtensionFields{
-		.clientHelloType = 5,
+		.clientHelloType = kProxySettingsMaximumClientHelloType,
 		.slowMode = 1,
 		.slowDelay = 250,
 		.slowJitter = 150,
@@ -27,7 +29,10 @@ int main() {
 	invalid.preferIPv6 = -1;
 	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
 	invalid = valid;
-	invalid.clientHelloType = 6;
+	invalid.clientHelloType = kProxySettingsMaximumClientHelloType + 1;
+	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
+	invalid = valid;
+	invalid.clientHelloType = kProxySettingsRandomClientHelloType - 1;
 	TEST_CHECK(!IsProxySettingsExtensionValid(invalid));
 	invalid = valid;
 	invalid.slowDelay = -1;

@@ -1,5 +1,5 @@
 diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
-index 688c18c29e..ccd05e83fe 100644
+index 688c18c..ccd05e8 100644
 --- a/Telegram/SourceFiles/window/window.style
 +++ b/Telegram/SourceFiles/window/window.style
 @@ -112,7 +112,7 @@ mainMenuCoverNameTop: 84px;
@@ -27,7 +27,7 @@ index 688c18c29e..ccd05e83fe 100644
  mainMenuToggleSize: 6px;
  mainMenuToggleFourStrokes: 3px;
 diff --git a/Telegram/SourceFiles/window/window_main_menu.cpp b/Telegram/SourceFiles/window/window_main_menu.cpp
-index f6f0985397..23d7089cf1 100644
+index f6f0985..c6d71e0 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu.cpp
 @@ -341,7 +341,9 @@ MainMenu::MainMenu(
@@ -49,10 +49,21 @@ index f6f0985397..23d7089cf1 100644
  	}, _footer->lifetime());
  
  	rpl::combine(
-@@ -387,22 +390,32 @@ MainMenu::MainMenu(
+@@ -387,22 +390,50 @@ MainMenu::MainMenu(
  		u"Telegram Desktop"_q,
  		u"https://desktop.telegram.org"_q));
  	_telegram->setLinksTrusted();
+-	_version->setMarkedText(
+-		tr::link(
+-			tr::lng_settings_current_version(
+-				tr::now,
+-				lt_version,
+-				currentVersionText()),
+-			1) // Link 1.
+-		.append(QChar(' '))
+-		.append(QChar(8211))
+-		.append(QChar(' '))
+-		.append(tr::link(tr::lng_menu_about(tr::now), 2))); // Link 2.
 +	class SourceCommitClickHandler final : public UrlClickHandler {
 +	public:
 +		SourceCommitClickHandler(QString url)
@@ -64,28 +75,38 @@ index f6f0985397..23d7089cf1 100644
 +		}
 +
 +	};
-+	const auto sourceCommitShort = u"__TDESKTOP_COMMIT_SHORT__"_q;
-+	const auto sourceCommitUrl = u"https://github.com/telegramdesktop/tdesktop/commit/__TDESKTOP_COMMIT_FULL__"_q;
- 	_version->setMarkedText(
--		tr::link(
--			tr::lng_settings_current_version(
--				tr::now,
--				lt_version,
--				currentVersionText()),
--			1) // Link 1.
--		.append(QChar(' '))
--		.append(QChar(8211))
--		.append(QChar(' '))
--		.append(tr::link(tr::lng_menu_about(tr::now), 2))); // Link 2.
-+		tr::link(currentVersionText(), 1)
++	const auto sourceCommitShort = ResolveEmbeddedBuildMetadata(
++		u"__TDESKTOP_COMMIT_SHORT__"_q,
++		QString());
++	const auto sourceCommitFull = ResolveEmbeddedBuildMetadata(
++		u"__TDESKTOP_COMMIT_FULL__"_q,
++		QString());
++	const auto hasSourceCommit = !sourceCommitShort.isEmpty()
++		&& !sourceCommitFull.isEmpty();
++	auto versionText = tr::link(
++		tr::lng_settings_current_version(
++			tr::now,
++			lt_version,
++			currentVersionText()),
++		1);
++	if (hasSourceCommit) {
++		versionText
 +			.append(u" · "_q)
-+			.append(tr::link(sourceCommitShort, 2)));
++			.append(tr::link(sourceCommitShort, 2));
++	}
++	_version->setMarkedText(versionText);
  	_version->setLink(
  		1,
  		std::make_shared<UrlClickHandler>(Core::App().changelogLink()));
- 	_version->setLink(
- 		2,
-+		std::make_shared<SourceCommitClickHandler>(sourceCommitUrl));
+-	_version->setLink(
+-		2,
++	if (hasSourceCommit) {
++		const auto sourceCommitUrl = u"https://github.com/telegramdesktop/tdesktop/commit/"_q
++			+ sourceCommitFull;
++		_version->setLink(
++			2,
++			std::make_shared<SourceCommitClickHandler>(sourceCommitUrl));
++	}
 +	_about->setMarkedText(tr::link(tr::lng_menu_about(tr::now), 1));
 +	_about->setLink(
 +		1,
@@ -93,7 +114,7 @@ index f6f0985397..23d7089cf1 100644
  			controller->show(Box(AboutBox));
  		}));
 diff --git a/Telegram/SourceFiles/window/window_main_menu.h b/Telegram/SourceFiles/window/window_main_menu.h
-index 5975e0e60d..57f09d55f3 100644
+index 5975e0e..57f09d5 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.h
 +++ b/Telegram/SourceFiles/window/window_main_menu.h
 @@ -105,6 +105,7 @@ private:
@@ -105,17 +126,67 @@ index 5975e0e60d..57f09d55f3 100644
  	rpl::event_stream<bool> _nightThemeSwitches;
  	base::Timer _nightThemeSwitch;
 diff --git a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
-index 69ef7df16f..1f604869d4 100644
+index 69ef7df..14bc88a 100644
 --- a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
-@@ -46,9 +46,7 @@ namespace Window {
+@@ -38,6 +38,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ namespace Window {
+ 
++QString ResolveEmbeddedBuildMetadata(
++		QString embedded,
++		QString fallback) {
++	const auto placeholder = embedded.startsWith(u"__TDESKTOP_"_q)
++		&& embedded.endsWith(u"__"_q);
++	return placeholder ? fallback : embedded;
++}
++
+ [[nodiscard]] not_null<Ui::FlatLabel*> AddVersionLabel(
+ 		not_null<Ui::RpWidget*> parent) {
+ 	const auto label = Ui::CreateChild<Ui::FlatLabel>(
+@@ -46,9 +54,18 @@ namespace Window {
  	if constexpr (!Platform::IsMacStoreBuild()
  		&& !Platform::IsWindowsStoreBuild()) {
  		Ui::InstallTooltip(label, [] {
 -			return u"Build date: %1.\nQt version: %2."_q
 -				.arg(__DATE__)
 -				.arg(QT_VERSION_STR);
-+			return u"Commit: __TDESKTOP_COMMIT_TIME_UTC__\nBuild: __TDESKTOP_BUILD_TIME_UTC__"_q;
++			return tr::lng_build_metadata(
++				tr::now,
++				lt_commit,
++				ResolveEmbeddedBuildMetadata(
++					u"__TDESKTOP_COMMIT_TIME_UTC__"_q,
++					u"unknown"_q),
++				lt_build,
++				ResolveEmbeddedBuildMetadata(
++					u"__TDESKTOP_BUILD_TIME_UTC__"_q,
++					QString::fromLatin1(__DATE__ " " __TIME__)),
++				lt_qt,
++				QString::fromLatin1(QT_VERSION_STR));
  		});
  	}
  	return label;
+diff --git a/Telegram/SourceFiles/window/window_main_menu_helpers.h b/Telegram/SourceFiles/window/window_main_menu_helpers.h
+index 94da85e..fe7ab69 100644
+--- a/Telegram/SourceFiles/window/window_main_menu_helpers.h
++++ b/Telegram/SourceFiles/window/window_main_menu_helpers.h
+@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #pragma once
+ 
++class QString;
++
+ namespace Ui {
+ class FlatLabel;
+ class RpWidget;
+@@ -18,6 +20,10 @@ namespace Window {
+ 
+ class SessionController;
+ 
++[[nodiscard]] QString ResolveEmbeddedBuildMetadata(
++	QString embedded,
++	QString fallback);
++
+ [[nodiscard]] not_null<Ui::FlatLabel*> AddVersionLabel(
+ 	not_null<Ui::RpWidget*>);
+ 

@@ -1,0 +1,1013 @@
+diff --git a/Telegram/SourceFiles/core/core_settings_proxy.cpp b/Telegram/SourceFiles/core/core_settings_proxy.cpp
+index 495bb0b..30d231f 100644
+--- a/Telegram/SourceFiles/core/core_settings_proxy.cpp
++++ b/Telegram/SourceFiles/core/core_settings_proxy.cpp
+@@ -6,13 +6,55 @@ For license and copyright information please follow this link:
+ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "core/core_settings_proxy.h"
++#include "core/proxy_settings_extension_policy.h"
+ 
+ #include "base/platform/base_platform_info.h"
+ #include "storage/serialize_common.h"
+ 
+ #include <algorithm>
++#include <optional>
+ 
+ namespace Core {
++
++[[nodiscard]] qint32 ProxyCHelloTypeToInt(MTP::ProxyData::CHelloType settings) {
++	switch(settings) {
++	case MTP::ProxyData::CHelloType::RANDOM:  return -1;
++	case MTP::ProxyData::CHelloType::Firefox: return 0;
++	case MTP::ProxyData::CHelloType::Chrome:  return 1;
++	case MTP::ProxyData::CHelloType::Custom:  return 2;
++	case MTP::ProxyData::CHelloType::SafariMac: return 3;
++	case MTP::ProxyData::CHelloType::YandexGost: return 4;
++	case MTP::ProxyData::CHelloType::Chromium150: return 5;
++	}
++	return -1;
++}
++
++[[nodiscard]] MTP::ProxyData::CHelloType IntToProxyCHelloType(qint32 value) {
++	switch(value) {
++	case -1: return MTP::ProxyData::CHelloType::RANDOM;
++	case 0: return MTP::ProxyData::CHelloType::Firefox;
++	case 1: return MTP::ProxyData::CHelloType::Chrome;
++	case 2: return MTP::ProxyData::CHelloType::Custom;
++	case 3: return MTP::ProxyData::CHelloType::SafariMac;
++	case 4: return MTP::ProxyData::CHelloType::YandexGost;
++	case 5: return MTP::ProxyData::CHelloType::Chromium150;
++	}
++	return MTP::ProxyData::CHelloType::RANDOM;
++}
++
++// The policy header is compiled standalone by the tests and cannot see the
++// enum, so the serialized range it accepts is pinned to the enum here.
++// RANDOM is the last enumerator and serializes to -1, every other profile
++// serializes to its own underlying value, so the highest serialized profile
++// is always the one right before RANDOM. Adding a profile without widening
++// the range would make the new value fail validation and reset to RANDOM.
++static_assert(
++	int(MTP::ProxyData::CHelloType::RANDOM)
++		== details::kProxySettingsMaximumClientHelloType + 1,
++	"A ClientHello profile was added or reordered: update "
++	"kProxySettingsMaximumClientHelloType together with "
++	"ProxyCHelloTypeToInt and IntToProxyCHelloType.");
++
+ namespace {
+ 
+ [[nodiscard]] qint32 ProxySettingsToInt(MTP::ProxyData::Settings settings) {
+@@ -21,7 +63,7 @@ namespace {
+ 	case MTP::ProxyData::Settings::Enabled: return 1;
+ 	case MTP::ProxyData::Settings::Disabled: return 2;
+ 	}
+-	Unexpected("Bad type in ProxySettingsToInt");
++	return 0;
+ }
+ 
+ [[nodiscard]] MTP::ProxyData::Settings IntToProxySettings(qint32 value) {
+@@ -30,14 +72,22 @@ namespace {
+ 	case 1: return MTP::ProxyData::Settings::Enabled;
+ 	case 2: return MTP::ProxyData::Settings::Disabled;
+ 	}
+-	Unexpected("Bad type in IntToProxySettings");
++	return MTP::ProxyData::Settings::System;
+ }
+ 
+-[[nodiscard]] MTP::ProxyData DeserializeProxyData(const QByteArray &data) {
++constexpr auto kMaximumSerializedProxyCount = 4096;
++constexpr auto kProxySettingsExtensionMagic = qint32(
++	details::kProxySettingsExtensionMagic);
++constexpr auto kProxySettingsExtensionVersion = qint32(
++	details::kProxySettingsExtensionVersion);
++
++[[nodiscard]] std::optional<MTP::ProxyData> DeserializeProxyData(
++		const QByteArray &data) {
+ 	QDataStream stream(data);
+ 	stream.setVersion(QDataStream::Qt_5_1);
+ 
+-	qint32 proxyType, port;
++	auto proxyType = qint32(0);
++	auto port = qint32(0);
+ 	MTP::ProxyData proxy;
+ 	stream
+ 		>> proxyType
+@@ -45,16 +95,35 @@ namespace {
+ 		>> port
+ 		>> proxy.user
+ 		>> proxy.password;
+-	proxy.port = port;
+-	proxy.type = [&] {
++	if (stream.status() != QDataStream::Ok) {
++		return {};
++	}
++	const auto type = [&]() -> std::optional<MTP::ProxyData::Type> {
+ 		switch(proxyType) {
+ 		case 0: return MTP::ProxyData::Type::None;
+ 		case 1: return MTP::ProxyData::Type::Socks5;
+ 		case 2: return MTP::ProxyData::Type::Http;
+ 		case 3: return MTP::ProxyData::Type::Mtproto;
+ 		}
+-		Unexpected("Bad type in DeserializeProxyData");
++		return std::nullopt;
+ 	}();
++	if (!type
++		|| port < 0
++		|| port > 65535) {
++		return std::nullopt;
++	}
++	proxy.port = port;
++	proxy.type = *type;
++	if (proxy.type == MTP::ProxyData::Type::None) {
++		if (proxy.port
++			|| !proxy.host.isEmpty()
++			|| !proxy.user.isEmpty()
++			|| !proxy.password.isEmpty()) {
++			return std::nullopt;
++		}
++	} else if (!proxy.valid()) {
++		return std::nullopt;
++	}
+ 	return proxy;
+ }
+ 
+@@ -75,7 +144,7 @@ namespace {
+ 			case MTP::ProxyData::Type::Http: return 2;
+ 			case MTP::ProxyData::Type::Mtproto: return 3;
+ 			}
+-			Unexpected("Bad type in SerializeProxyData");
++			return 0;
+ 		}();
+ 
+ 		QDataStream stream(&result, QIODevice::WriteOnly);
+@@ -109,7 +178,8 @@ std::vector<int> NormalizeProxyRotationPreferredIndices(
+ } // namespace
+ 
+ SettingsProxy::SettingsProxy()
+-: _tryIPv6(!Platform::IsWindows()) {
++: _tryIPv6(!Platform::IsWindows())
++, _proxyPreferIPv6(_tryIPv6) {
+ }
+ 
+ QByteArray SettingsProxy::serialize() const {
+@@ -117,6 +187,15 @@ QByteArray SettingsProxy::serialize() const {
+ 	const auto serializedList = ranges::views::all(
+ 		_list
+ 	) | ranges::views::transform(SerializeProxyData) | ranges::to_vector;
++	auto extensionWriter = Serialize::ByteArrayWriter(
++		details::kProxySettingsExtensionFieldCount * int(sizeof(qint32)));
++	extensionWriter
++		<< ProxyCHelloTypeToInt(_ch_type)
++		<< qint32(_proxySlowMode ? 1 : 0)
++		<< qint32(_proxySlowDelay)
++		<< qint32(_proxySlowJitter)
++		<< qint32(_proxyPreferIPv6 ? 1 : 0);
++	const auto serializedExtension = std::move(extensionWriter).result();
+ 
+ 	const auto size = 3 * sizeof(qint32)
+ 		+ Serialize::bytearraySize(serializedSelected)
+@@ -126,7 +205,8 @@ QByteArray SettingsProxy::serialize() const {
+ 			0,
+ 			ranges::plus(),
+ 			&Serialize::bytearraySize)
+-		+ (4 + int(_proxyRotationPreferredIndices.size())) * sizeof(qint32);
++		+ (6 + int(_proxyRotationPreferredIndices.size())) * sizeof(qint32)
++		+ Serialize::bytearraySize(serializedExtension);
+ 	auto stream = Serialize::ByteArrayWriter(size);
+ 	stream
+ 		<< qint32(_tryIPv6 ? 1 : 0)
+@@ -145,6 +225,10 @@ QByteArray SettingsProxy::serialize() const {
+ 	for (const auto index : _proxyRotationPreferredIndices) {
+ 		stream << qint32(index);
+ 	}
++	stream
++		<< kProxySettingsExtensionMagic
++		<< kProxySettingsExtensionVersion
++		<< serializedExtension;
+ 	return std::move(stream).result();
+ }
+ 
+@@ -170,14 +254,19 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 			>> selectedProxy
+ 			>> listCount;
+ 		if (stream.ok()) {
+-			if (listCount < 0) {
++			if (listCount < 0
++				|| listCount > kMaximumSerializedProxyCount) {
+ 				return false;
+ 			}
+ 			list.reserve(listCount);
+ 			for (auto i = 0; i != listCount; ++i) {
+ 				QByteArray data;
+ 				stream >> data;
+-				list.push_back(DeserializeProxyData(data));
++				const auto proxy = DeserializeProxyData(data);
++				if (!proxy || !proxy->valid()) {
++					return false;
++				}
++				list.push_back(*proxy);
+ 			}
+ 		}
+ 	}
+@@ -199,7 +288,8 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 	if (!stream.atEnd()) {
+ 		stream >> preferredCount;
+ 		if (stream.ok()) {
+-			if (preferredCount < 0) {
++			if (preferredCount < 0
++				|| preferredCount > kMaximumSerializedProxyCount) {
+ 				return false;
+ 			}
+ 			preferredIndices.reserve(preferredCount);
+@@ -210,12 +300,100 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 			}
+ 		}
+ 	}
+-
+ 	if (!stream.ok()) {
+ 		LOG(("App Error: "
+ 			"Bad data for Core::SettingsProxy::setFromSerialized()"));
+ 		return false;
+ 	}
++	qint32 proxyCHtype = ProxyCHelloTypeToInt(_ch_type);
++	qint32 proxySlowMode = qint32(_proxySlowMode ? 1 : 0);
++	qint32 proxySlowDelay = _proxySlowDelay;
++	qint32 proxySlowJitter = _proxySlowJitter;
++	auto proxyPreferIPv6 = qint32(_proxyPreferIPv6 ? 1 : 0);
++	const auto resetExtensionFields = [&] {
++		proxyCHtype = ProxyCHelloTypeToInt(_ch_type);
++		proxySlowMode = qint32(_proxySlowMode ? 1 : 0);
++		proxySlowDelay = _proxySlowDelay;
++		proxySlowJitter = _proxySlowJitter;
++		proxyPreferIPv6 = qint32(_proxyPreferIPv6 ? 1 : 0);
++	};
++	auto invalidExtension = false;
++	if (!stream.atEnd()) {
++		auto marker = qint32(0);
++		stream >> marker;
++		if (!stream.ok()) {
++			invalidExtension = true;
++		} else if (marker == kProxySettingsExtensionMagic) {
++			auto version = qint32(0);
++			stream >> version;
++			if (!stream.ok()) {
++				invalidExtension = true;
++			} else if (version == details::kProxySettingsLegacyExtensionVersion) {
++				// Version 1 had no payload length and must stay readable.
++				stream
++					>> proxyCHtype
++					>> proxySlowMode
++					>> proxySlowDelay
++					>> proxySlowJitter
++					>> proxyPreferIPv6;
++				invalidExtension = !stream.ok();
++			} else if (version >= kProxySettingsExtensionVersion) {
++				auto extension = QByteArray();
++				stream >> extension;
++				if (!stream.ok()
++					|| extension.size()
++						> details::kMaximumProxySettingsExtensionBytes) {
++					invalidExtension = true;
++				} else if (version == kProxySettingsExtensionVersion) {
++					auto extensionStream = Serialize::ByteArrayReader(extension);
++					extensionStream
++						>> proxyCHtype
++						>> proxySlowMode
++						>> proxySlowDelay
++						>> proxySlowJitter
++						>> proxyPreferIPv6;
++					if (!extensionStream.ok() || !extensionStream.atEnd()) {
++						invalidExtension = true;
++					}
++				} else {
++					LOG(("App Info: "
++						"Future proxy settings extension ignored."));
++				}
++				// Unknown future versions are safely skipped by payload length.
++			} else {
++				invalidExtension = true;
++			}
++		} else {
++			// Compatibility with the previous unversioned five-field tail.
++			proxyCHtype = marker;
++			if (!stream.atEnd()) {
++				stream >> proxySlowMode;
++			}
++			if (!stream.atEnd()) {
++				stream >> proxySlowDelay;
++			}
++			if (!stream.atEnd()) {
++				stream >> proxySlowJitter;
++			}
++			if (!stream.atEnd()) {
++				stream >> proxyPreferIPv6;
++			}
++			invalidExtension = !stream.ok();
++		}
++	}
++	const auto extensionFields = details::ProxySettingsExtensionFields{
++		.clientHelloType = proxyCHtype,
++		.slowMode = proxySlowMode,
++		.slowDelay = proxySlowDelay,
++		.slowJitter = proxySlowJitter,
++		.preferIPv6 = proxyPreferIPv6,
++	};
++	if (invalidExtension
++		|| !details::IsProxySettingsExtensionValid(extensionFields)) {
++		LOG(("App Error: "
++			"Invalid proxy settings extension ignored."));
++		resetExtensionFields();
++	}
+ 
+ 	_tryIPv6 = (tryIPv6 == 1);
+ 	_useProxyForCalls = (useProxyForCalls == 1);
+@@ -223,10 +401,27 @@ bool SettingsProxy::setFromSerialized(const QByteArray &serialized) {
+ 	_proxyRotationEnabled = (proxyRotationEnabled == 1);
+ 	setProxyRotationTimeout(proxyRotationTimeout);
+ 	_settings = IntToProxySettings(settings);
+-	_selected = DeserializeProxyData(selectedProxy);
++	if (selectedProxy.isEmpty()) {
++		_selected = MTP::ProxyData();
++	} else if (const auto selected = DeserializeProxyData(selectedProxy)) {
++		_selected = *selected;
++	} else {
++		return false;
++	}
+ 	_list = std::move(list);
+ 	setProxyRotationPreferredIndices(std::move(preferredIndices));
+-
++	// custom Client Hello
++	_ch_type = IntToProxyCHelloType(proxyCHtype);
++	MTP::ProxyData::setGlobalClientHelloRulesType(_ch_type);
++	// slow mode
++	_proxySlowMode = (proxySlowMode == 1);
++	setProxySlowDelay(proxySlowDelay);
++	setProxySlowJitter(proxySlowJitter);
++	MTP::ProxyData::setGlobalSlowMode(_proxySlowMode);
++	MTP::ProxyData::setGlobalSlowDelay(_proxySlowDelay);
++	MTP::ProxyData::setGlobalSlowJitter(_proxySlowJitter);
++	_proxyPreferIPv6 = _tryIPv6 && (proxyPreferIPv6 == 1);
++	MTP::ProxyData::setGlobalPreferIPv6(_proxyPreferIPv6);
+ 	return true;
+ }
+ 
+@@ -306,10 +501,57 @@ int SettingsProxy::proxyRotationTimeout() const {
+ 
+ void SettingsProxy::setProxyRotationTimeout(int value) {
+ 	_proxyRotationTimeout = (value > 0)
+-		? value
++		? std::min(value, kMaximumTimingValue)
+ 		: kDefaultProxyRotationTimeout;
+ }
+ 
++MTP::ProxyData::CHelloType SettingsProxy::proxyCHelloType() const {
++	return _ch_type;
++}
++
++void SettingsProxy::setProxyCHelloType(MTP::ProxyData::CHelloType value) {
++	_ch_type = value;
++}
++
++bool SettingsProxy::proxySlowMode() const {
++	return _proxySlowMode;
++}
++
++void SettingsProxy::setProxySlowMode(bool value) {
++	_proxySlowMode = value;
++}
++
++int SettingsProxy::proxySlowDelay() const {
++	return _proxySlowDelay;
++}
++
++void SettingsProxy::setProxySlowDelay(int value) {
++	_proxySlowDelay = std::clamp(value, 0, kMaximumTimingValue);
++	_proxySlowJitter = std::clamp(
++		_proxySlowJitter,
++		0,
++		kMaximumTimingValue - _proxySlowDelay);
++}
++
++int SettingsProxy::proxySlowJitter() const {
++	return _proxySlowJitter;
++}
++
++void SettingsProxy::setProxySlowJitter(int value) {
++	_proxySlowJitter = std::clamp(
++		value,
++		0,
++		kMaximumTimingValue - _proxySlowDelay);
++}
++
++bool SettingsProxy::proxyPreferIPv6() const {
++	return _proxyPreferIPv6;
++}
++
++void SettingsProxy::setProxyPreferIPv6(bool value) {
++	_proxyPreferIPv6 = value;
++}
++
+ MTP::ProxyData::Settings SettingsProxy::settings() const {
+ 	return _settings;
+ }
+diff --git a/Telegram/SourceFiles/core/core_settings_proxy.h b/Telegram/SourceFiles/core/core_settings_proxy.h
+index 1f2ec5c..0b14ff1 100644
+--- a/Telegram/SourceFiles/core/core_settings_proxy.h
++++ b/Telegram/SourceFiles/core/core_settings_proxy.h
+@@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ namespace Core {
+ 
++[[nodiscard]] qint32 ProxyCHelloTypeToInt(MTP::ProxyData::CHelloType settings);
++[[nodiscard]] MTP::ProxyData::CHelloType IntToProxyCHelloType(qint32 value);
++
+ class SettingsProxy final {
+ public:
+ 	static constexpr auto kProxyRotationTimeouts = std::array{
+@@ -23,6 +26,7 @@ public:
+ 		60,
+ 	};
+ 	static constexpr auto kDefaultProxyRotationTimeout = 10;
++	static constexpr auto kMaximumTimingValue = 7500;
+ 
+ 	SettingsProxy();
+ 
+@@ -46,6 +50,21 @@ public:
+ 	[[nodiscard]] int proxyRotationTimeout() const;
+ 	void setProxyRotationTimeout(int value);
+ 
++	[[nodiscard]] MTP::ProxyData::CHelloType proxyCHelloType() const;
++	void setProxyCHelloType(MTP::ProxyData::CHelloType value);
++
++	[[nodiscard]] bool proxySlowMode() const;
++	void setProxySlowMode(bool value);
++
++	[[nodiscard]] int proxySlowDelay() const;
++	void setProxySlowDelay(int value);
++
++	[[nodiscard]] int proxySlowJitter() const;
++	void setProxySlowJitter(int value);
++
++	[[nodiscard]] bool proxyPreferIPv6() const;
++	void setProxyPreferIPv6(bool value);
++
+ 	[[nodiscard]] MTP::ProxyData::Settings settings() const;
+ 	void setSettings(MTP::ProxyData::Settings value);
+ 
+@@ -80,6 +99,12 @@ private:
+ 	bool _checkIpWarningShown = false;
+ 	int _proxyRotationTimeout = kDefaultProxyRotationTimeout;
+ 	MTP::ProxyData::Settings _settings = MTP::ProxyData::Settings::System;
++	MTP::ProxyData::CHelloType _ch_type = MTP::ProxyData::CHelloType::Chromium150;
++	bool _proxySlowMode = false;
++	int _proxySlowDelay = 250;
++	int _proxySlowJitter = 150;
++	bool _proxyPreferIPv6 = false;
++
+ 	MTP::ProxyData _selected;
+ 	std::vector<MTP::ProxyData> _list;
+ 	std::vector<int> _proxyRotationPreferredIndices;
+diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
+index a643f0a..496bae8 100644
+--- a/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
++++ b/Telegram/SourceFiles/core/proxy_rotation_manager.cpp
+@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
+ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "core/proxy_rotation_manager.h"
++#include "core/proxy_rotation_policy.h"
+ 
+ #include "core/application.h"
+ #include "core/core_settings.h"
+@@ -19,14 +20,17 @@ namespace Core {
+ namespace {
+ 
+ constexpr auto kProxyRotationCheckInterval = 2 * crl::time(1000);
+-constexpr auto kProxyRotationCheckLifetime = 20 * crl::time(1000);
+-constexpr auto kProxyRotationMaxActiveChecks = 10;
++constexpr auto kProxyRotationBaseRecheckInterval = 30 * crl::time(1000);
++constexpr auto kProxyRotationMaximumRecheckInterval = 5 * crl::time(60 * 1000);
++constexpr auto kProxyRotationSelectionPoll = crl::time(
++	details::kProxyRotationSelectionPollMs);
+ 
+ } // namespace
+ 
+ ProxyRotationManager::ProxyRotationManager()
+ : _checkTimer([=] { runChecks(); })
+-, _switchTimer([=] { switchTimerDone(); }) {
++, _switchTimer([=] { switchTimerDone(); })
++, _selectionTimer([=] { selectionTimerDone(); }) {
+ 	App().domain().accountsChanges(
+ 	) | rpl::on_next([=] {
+ 		stopChecking();
+@@ -124,6 +128,9 @@ void ProxyRotationManager::startChecking() {
+ 	_checking = true;
+ 	_waitingToSwitch = false;
+ 	_switchStartedAt = crl::now();
++	_roundStartedAt = _switchStartedAt;
++	_selectionStartedAt = 0;
++	_failedRounds = 0;
+ 	updateProbeOrder();
+ 	runChecks();
+ 	const auto timeout = App().settings().proxy().proxyRotationTimeout();
+@@ -133,9 +140,13 @@ void ProxyRotationManager::startChecking() {
+ void ProxyRotationManager::stopChecking() {
+ 	_checkTimer.cancel();
+ 	_switchTimer.cancel();
++	_selectionTimer.cancel();
+ 	_checking = false;
+ 	_waitingToSwitch = false;
+ 	_switchStartedAt = 0;
++	_roundStartedAt = 0;
++	_selectionStartedAt = 0;
++	_failedRounds = 0;
+ 	_probeOrder.clear();
+ 	_nextCheckIndex = 0;
+ 	clearPendingChecks();
+@@ -199,33 +210,16 @@ void ProxyRotationManager::runChecks() {
+ 		stopChecking();
+ 		return;
+ 	}
+-	pruneExpiredChecks();
+ 	startNextCheck();
+ 	continueChecking(kProxyRotationCheckInterval);
+ }
+ 
+-void ProxyRotationManager::pruneExpiredChecks() {
+-	const auto now = crl::now();
+-	for (auto &entry : _entries) {
+-		if (!entry.checking
+-			|| (now - entry.startedAt < kProxyRotationCheckLifetime)) {
+-			continue;
+-		}
+-		MTP::ResetProxyCheckers(entry.v4, entry.v6);
+-		entry.checking = false;
+-		entry.startedAt = 0;
+-	}
+-}
+-
+ void ProxyRotationManager::startNextCheck() {
+ 	if (_probeOrder.empty()) {
+ 		return;
+ 	}
+-	if (ranges::count(_entries, true, &Entry::checking)
+-		>= kProxyRotationMaxActiveChecks) {
+-		return;
+-	}
+ 	const auto &settings = App().settings().proxy();
++	const auto now = crl::now();
+ 	auto attemptsLeft = int(_probeOrder.size());
+ 	while (attemptsLeft-- > 0) {
+ 		if (_nextCheckIndex >= int(_probeOrder.size())) {
+@@ -237,24 +231,23 @@ void ProxyRotationManager::startNextCheck() {
+ 		}
+ 		const auto &proxy = settings.list()[listIndex];
+ 		auto &entry = ensure(proxy);
+-		if (entry.checking) {
++		const auto checkedSinceStart = entry.checkedAt >= _switchStartedAt;
++		if (entry.checking
++			|| (checkedSinceStart
++				&& (now - entry.checkedAt < recheckInterval()))) {
+ 			continue;
+ 		}
+ 		entry.checking = true;
+-		entry.startedAt = crl::now();
+-		MTP::StartProxyCheck(
++		entry.check = MTP::ScheduleProxyCheck(
+ 			&accountForChecks()->mtp(),
+ 			proxy,
+ 			settings.tryIPv6(),
+-			entry.v4,
+-			entry.v6,
+-			[=](MTP::details::AbstractConnection *raw, int ping) {
+-				checkDone(proxy, raw, ping);
++			[=](int ping) {
++				checkDone(proxy, ping);
+ 			},
+-			[=](MTP::details::AbstractConnection *raw) {
+-				checkFailed(proxy, raw);
++			[=] {
++				checkFailed(proxy);
+ 			});
+-		break;
+ 	}
+ }
+ 
+@@ -262,32 +255,94 @@ void ProxyRotationManager::switchTimerDone() {
+ 	if (!_checking || !shouldSwitchToAvailable()) {
+ 		return;
+ 	}
++	_waitingToSwitch = true;
++	scheduleSwitchSelection();
++}
++
++void ProxyRotationManager::scheduleSwitchSelection() {
++	if (!_waitingToSwitch) {
++		return;
++	}
++	if (!_selectionStartedAt) {
++		_selectionStartedAt = crl::now();
++	}
++	if (!_selectionTimer.isActive()) {
++		_selectionTimer.callOnce(kProxyRotationSelectionPoll);
++	}
++}
++
++void ProxyRotationManager::selectionTimerDone() {
++	if (!_waitingToSwitch || !shouldSwitchToAvailable()) {
++		_selectionStartedAt = 0;
++		return;
++	}
++	const auto now = crl::now();
++	const auto hasPendingChecks = ranges::contains(
++		_entries,
++		true,
++		&Entry::checking);
++	const auto elapsed = int(now - _selectionStartedAt);
++	if (details::ProxyRotationShouldKeepWaiting(
++			hasPendingChecks,
++			elapsed)) {
++		_selectionTimer.callOnce(kProxyRotationSelectionPoll);
++		return;
++	}
+ 	_waitingToSwitch = !switchToAvailable();
++	_selectionStartedAt = 0;
++}
++
++crl::time ProxyRotationManager::recheckInterval() const {
++	auto result = kProxyRotationBaseRecheckInterval;
++	for (auto i = 1; i < _failedRounds; ++i) {
++		result = std::min(result * 2, kProxyRotationMaximumRecheckInterval);
++	}
++	return result;
++}
++
++void ProxyRotationManager::finishFailedRoundIfNeeded() {
++	if (!_checking || !_roundStartedAt) {
++		return;
++	}
++	const auto &settings = App().settings().proxy();
++	for (const auto index : _probeOrder) {
++		if (index < 0 || index >= int(settings.list().size())) {
++			continue;
++		}
++		const auto entry = find(settings.list()[index]);
++		if (!entry || entry->checking || entry->checkedAt < _roundStartedAt) {
++			return;
++		}
++		if (entry->availableAt >= _roundStartedAt) {
++			return;
++		}
++	}
++	_failedRounds = std::min(_failedRounds + 1, 5);
++	_roundStartedAt = crl::now();
+ }
+ 
+ void ProxyRotationManager::clearPendingChecks() {
+ 	for (auto &entry : _entries) {
+-		MTP::ResetProxyCheckers(entry.v4, entry.v6);
++		entry.check = nullptr;
+ 		entry.checking = false;
+-		entry.startedAt = 0;
+ 	}
+ }
+ 
+ void ProxyRotationManager::checkDone(
+ 		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw,
+ 		int ping) {
+ 	const auto entry = find(proxy);
+-	if (!entry
+-		|| !entry->checking
+-		|| ((entry->v4.get() != raw) && (entry->v6.get() != raw))) {
++	if (!entry || !entry->checking) {
+ 		return;
+ 	}
+-	MTP::DropProxyChecker(entry->v4, entry->v6, raw);
+-	MTP::ResetProxyCheckers(entry->v4, entry->v6);
++	entry->check = nullptr;
+ 	entry->checking = false;
+-	entry->startedAt = 0;
++	entry->checkedAt = crl::now();
+ 	entry->availableAt = crl::now();
++	entry->health = details::ProxyRotationRecordSuccess(
++		entry->health,
++		ping);
++	_failedRounds = 0;
+ 	const auto proxySettings = &App().settings().proxy();
+ 	if (const auto index = proxySettings->indexInList(proxy); index >= 0) {
+ 		if (proxySettings->promoteProxyRotationPreferredIndex(index)) {
+@@ -296,25 +351,25 @@ void ProxyRotationManager::checkDone(
+ 	}
+ 	updateProbeOrder();
+ 	if (_waitingToSwitch && shouldSwitchToAvailable()) {
+-		_waitingToSwitch = !switchToAvailable();
++		scheduleSwitchSelection();
+ 	}
+ }
+ 
+ void ProxyRotationManager::checkFailed(
+-		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw) {
++		const MTP::ProxyData &proxy) {
+ 	const auto entry = find(proxy);
+-	if (!entry
+-		|| !entry->checking
+-		|| ((entry->v4.get() != raw) && (entry->v6.get() != raw))) {
+-		return;
+-	}
+-	MTP::DropProxyChecker(entry->v4, entry->v6, raw);
+-	if (MTP::HasProxyCheckers(entry->v4, entry->v6)) {
++	if (!entry || !entry->checking) {
+ 		return;
+ 	}
++	entry->check = nullptr;
+ 	entry->checking = false;
+-	entry->startedAt = 0;
++	entry->checkedAt = crl::now();
++	entry->availableAt = 0;
++	entry->health = details::ProxyRotationRecordFailure(entry->health);
++	finishFailedRoundIfNeeded();
++	if (_waitingToSwitch && shouldSwitchToAvailable()) {
++		scheduleSwitchSelection();
++	}
+ }
+ 
+ bool ProxyRotationManager::switchToAvailable() {
+@@ -322,24 +377,41 @@ bool ProxyRotationManager::switchToAvailable() {
+ 		return false;
+ 	}
+ 	const auto &settings = App().settings().proxy();
++	auto bestIndex = -1;
++	auto bestScore = std::int64_t(0);
++	const auto now = crl::now();
+ 	for (const auto index : _probeOrder) {
+ 		if (index < 0 || index >= int(settings.list().size())) {
+ 			continue;
+ 		}
+ 		const auto &proxy = settings.list()[index];
+ 		const auto entry = find(proxy);
+-		if (!entry || entry->checking || !entry->availableAt) {
++		if (!entry || !entry->availableAt) {
+ 			continue;
+ 		}
+-		if (entry->availableAt < _switchStartedAt) {
++		const auto ageSeconds = int(std::max(
++			(now - entry->availableAt) / crl::time(1000),
++			crl::time(0)));
++		if (!details::ProxyRotationResultIsFresh(ageSeconds)) {
+ 			continue;
+ 		}
+-		_waitingToSwitch = false;
+-		App().setCurrentProxy(proxy, MTP::ProxyData::Settings::Enabled);
+-		App().saveSettingsDelayed();
+-		return true;
++		const auto score = details::ProxyRotationSelectionScore(
++			entry->health,
++			ageSeconds);
++		if (bestIndex < 0 || score < bestScore) {
++			bestIndex = index;
++			bestScore = score;
++		}
+ 	}
+-	return false;
++	if (bestIndex < 0) {
++		return false;
++	}
++	_waitingToSwitch = false;
++	App().setCurrentProxy(
++		settings.list()[bestIndex],
++		MTP::ProxyData::Settings::Enabled);
++	App().saveSettingsDelayed();
++	return true;
+ }
+ 
+ bool ProxyRotationManager::shouldSwitchToAvailable() const {
+diff --git a/Telegram/SourceFiles/core/proxy_rotation_manager.h b/Telegram/SourceFiles/core/proxy_rotation_manager.h
+index c1fee27..c99f1fe 100644
+--- a/Telegram/SourceFiles/core/proxy_rotation_manager.h
++++ b/Telegram/SourceFiles/core/proxy_rotation_manager.h
+@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include "base/timer.h"
+ #include "mtproto/proxy_check.h"
++#include "core/proxy_rotation_policy.h"
+ 
+ #include <rpl/lifetime.h>
+ #include <vector>
+@@ -31,11 +32,11 @@ public:
+ private:
+ 	struct Entry {
+ 		MTP::ProxyData proxy;
+-		MTP::ProxyCheckConnection v4;
+-		MTP::ProxyCheckConnection v6;
++		MTP::ProxyCheckHandlePointer check;
+ 		bool checking = false;
+-		crl::time startedAt = 0;
++		crl::time checkedAt = 0;
+ 		crl::time availableAt = 0;
++		details::ProxyRotationHealth health;
+ 	};
+ 
+ 	[[nodiscard]] bool shouldObserve() const;
+@@ -51,28 +52,32 @@ private:
+ 	void updateProbeOrder();
+ 	void continueChecking(crl::time delay);
+ 	void runChecks();
+-	void pruneExpiredChecks();
+ 	void startNextCheck();
+ 	void switchTimerDone();
++	void scheduleSwitchSelection();
++	void selectionTimerDone();
++	void finishFailedRoundIfNeeded();
++	[[nodiscard]] crl::time recheckInterval() const;
+ 	void clearPendingChecks();
+ 	void checkDone(
+ 		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw,
+ 		int ping);
+-	void checkFailed(
+-		const MTP::ProxyData &proxy,
+-		not_null<MTP::details::AbstractConnection*> raw);
++	void checkFailed(const MTP::ProxyData &proxy);
+ 	[[nodiscard]] bool switchToAvailable();
+ 	[[nodiscard]] bool shouldSwitchToAvailable() const;
+ 
+ 	base::Timer _checkTimer;
+ 	base::Timer _switchTimer;
++	base::Timer _selectionTimer;
+ 	std::vector<Entry> _entries;
+ 	std::vector<int> _probeOrder;
+ 	int _nextCheckIndex = 0;
+ 	bool _checking = false;
+ 	bool _waitingToSwitch = false;
+ 	crl::time _switchStartedAt = 0;
++	crl::time _roundStartedAt = 0;
++	crl::time _selectionStartedAt = 0;
++	int _failedRounds = 0;
+ 	rpl::lifetime _lifetime;
+ 
+ };
+diff --git a/Telegram/SourceFiles/core/proxy_rotation_policy.h b/Telegram/SourceFiles/core/proxy_rotation_policy.h
+new file mode 100644
+index 0000000..adca626
+--- /dev/null
++++ b/Telegram/SourceFiles/core/proxy_rotation_policy.h
+@@ -0,0 +1,98 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++#include <cstdlib>
++
++namespace Core::details {
++
++inline constexpr auto kProxyRotationSelectionPollMs = 100;
++inline constexpr auto kProxyRotationSelectionMaximumWaitMs = 2500;
++inline constexpr auto kProxyRotationFailurePenaltyStep = 250;
++inline constexpr auto kProxyRotationMaximumFailurePenalty = 2000;
++inline constexpr auto kProxyRotationFixedPointScale = 8;
++inline constexpr auto kProxyRotationDeviationWeight = 4;
++inline constexpr auto kProxyRotationMaximumResultAgeSeconds = 5 * 60;
++
++struct ProxyRotationHealth final {
++	std::int64_t smoothedPingX8 = 0;
++	std::int64_t deviationX8 = 0;
++	int failurePenalty = 0;
++};
++
++[[nodiscard]] constexpr ProxyRotationHealth ProxyRotationRecordSuccess(
++		ProxyRotationHealth health,
++		int ping) {
++	ping = std::max(ping, 1);
++	const auto sampleX8 = std::int64_t(ping)
++		* kProxyRotationFixedPointScale;
++	if (!health.smoothedPingX8) {
++		health.smoothedPingX8 = sampleX8;
++		health.deviationX8 = 0;
++	} else {
++		const auto deltaX8 = std::abs(sampleX8 - health.smoothedPingX8);
++		health.deviationX8 = (
++			3 * health.deviationX8
++			+ deltaX8
++			+ 2) / 4;
++		health.smoothedPingX8 = (
++			3 * health.smoothedPingX8
++			+ sampleX8
++			+ 2) / 4;
++	}
++	health.failurePenalty /= 2;
++	return health;
++}
++
++[[nodiscard]] constexpr ProxyRotationHealth ProxyRotationRecordFailure(
++		ProxyRotationHealth health) {
++	health.failurePenalty = std::min(
++		health.failurePenalty + kProxyRotationFailurePenaltyStep,
++		kProxyRotationMaximumFailurePenalty);
++	health.deviationX8 = std::min(
++		health.deviationX8
++			+ 50 * kProxyRotationFixedPointScale,
++		std::int64_t(1000 * kProxyRotationFixedPointScale));
++	return health;
++}
++
++[[nodiscard]] constexpr std::int64_t ProxyRotationSelectionScore(
++		const ProxyRotationHealth &health,
++		int ageSeconds) {
++	const auto normalizedPingX8 = std::max(
++		health.smoothedPingX8,
++		std::int64_t(kProxyRotationFixedPointScale));
++	const auto agePenalty = std::clamp(
++		ageSeconds,
++		0,
++		kProxyRotationMaximumResultAgeSeconds);
++	return normalizedPingX8
++		+ std::int64_t(health.failurePenalty + agePenalty)
++			* kProxyRotationFixedPointScale
++		+ kProxyRotationDeviationWeight * health.deviationX8;
++}
++
++[[nodiscard]] constexpr bool ProxyRotationResultIsFresh(int ageSeconds) {
++	return ageSeconds >= 0
++		&& ageSeconds <= kProxyRotationMaximumResultAgeSeconds;
++}
++
++[[nodiscard]] constexpr bool ProxyRotationShouldKeepWaiting(
++		bool hasPendingChecks,
++		int elapsedMs) {
++	return hasPendingChecks
++		&& elapsedMs < kProxyRotationSelectionMaximumWaitMs;
++}
++
++static_assert(kProxyRotationSelectionPollMs > 0);
++static_assert(
++	kProxyRotationSelectionPollMs < kProxyRotationSelectionMaximumWaitMs);
++
++} // namespace Core::details
+diff --git a/Telegram/SourceFiles/core/proxy_settings_extension_policy.h b/Telegram/SourceFiles/core/proxy_settings_extension_policy.h
+new file mode 100644
+index 0000000..435e2e4
+--- /dev/null
++++ b/Telegram/SourceFiles/core/proxy_settings_extension_policy.h
+@@ -0,0 +1,52 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <cstdint>
++
++namespace Core::details {
++
++inline constexpr auto kProxySettingsExtensionMagic = std::int32_t(0x54505831);
++inline constexpr auto kProxySettingsLegacyExtensionVersion = std::int32_t(1);
++inline constexpr auto kProxySettingsExtensionVersion = std::int32_t(2);
++inline constexpr auto kProxySettingsExtensionFieldCount = 5;
++inline constexpr auto kMaximumProxySettingsExtensionBytes = 4096;
++
++// Serialized MTP::ProxyData::CHelloType range. This header is compiled
++// standalone by the policy tests, so it cannot include the enum itself;
++// core_settings_proxy.cpp static_asserts that both stay in sync.
++inline constexpr auto kProxySettingsRandomClientHelloType = std::int32_t(-1);
++inline constexpr auto kProxySettingsMaximumClientHelloType = std::int32_t(5);
++
++struct ProxySettingsExtensionFields final {
++	std::int32_t clientHelloType = kProxySettingsRandomClientHelloType;
++	std::int32_t slowMode = 0;
++	std::int32_t slowDelay = 250;
++	std::int32_t slowJitter = 150;
++	std::int32_t preferIPv6 = 0;
++};
++
++[[nodiscard]] constexpr bool IsProxySettingsBoolean(std::int32_t value) {
++	return value == 0 || value == 1;
++}
++
++[[nodiscard]] constexpr bool IsProxySettingsExtensionValid(
++		const ProxySettingsExtensionFields &fields) {
++	return fields.clientHelloType >= kProxySettingsRandomClientHelloType
++		&& fields.clientHelloType <= kProxySettingsMaximumClientHelloType
++		&& IsProxySettingsBoolean(fields.slowMode)
++		&& IsProxySettingsBoolean(fields.preferIPv6)
++		&& fields.slowDelay >= 0
++		&& fields.slowJitter >= 0;
++}
++
++static_assert(kProxySettingsLegacyExtensionVersion == 1);
++static_assert(kProxySettingsExtensionVersion > kProxySettingsLegacyExtensionVersion);
++static_assert(kProxySettingsExtensionFieldCount == 5);
++
++} // namespace Core::details

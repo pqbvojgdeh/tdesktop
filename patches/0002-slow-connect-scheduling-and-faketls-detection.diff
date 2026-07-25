@@ -1,0 +1,542 @@
+diff --git a/Telegram/SourceFiles/mtproto/connection_tcp.cpp b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
+index 44321c3..db85663 100644
+--- a/Telegram/SourceFiles/mtproto/connection_tcp.cpp
++++ b/Telegram/SourceFiles/mtproto/connection_tcp.cpp
+@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "mtproto/connection_tcp.h"
+ 
+ #include "mtproto/details/mtproto_abstract_socket.h"
++#include "mtproto/details/mtproto_fake_tls_policy.h"
++#include "mtproto/details/mtproto_slow_connect_policy.h"
+ #include "base/bytes.h"
+ #include "base/openssl_help.h"
+ #include "base/random.h"
+@@ -19,6 +21,8 @@ namespace {
+ 
+ constexpr auto kPacketSizeMax = int(0x01000000 * sizeof(mtpPrime));
+ constexpr auto kFullConnectionTimeout = 8 * crl::time(1000);
++constexpr auto kSlowConnectTimeoutBudget = crl::time(
++	kSlowConnectMaximumTimeoutBudgetMs);
+ constexpr auto kSmallBufferSize = 256 * 1024;
+ constexpr auto kMinPacketBuffer = 256;
+ constexpr auto kConnectionStartPrefixSize = 64;
+@@ -232,7 +236,7 @@ QString TcpConnection::Protocol::VersionD::debugPostfix() const {
+ auto TcpConnection::Protocol::Create(bytes::const_span secret)
+ -> std::unique_ptr<Protocol> {
+ 	// See also DcOptions::ValidateSecret.
+-	if ((secret.size() >= 21 && secret[0] == bytes::type(0xEE))
++	if (IsFakeTlsSecret(secret)
+ 		|| (secret.size() == 17 && secret[0] == bytes::type(0xDD))) {
+ 		return std::make_unique<VersionD>(
+ 			bytes::make_vector(secret.subspan(1, 16)));
+@@ -579,6 +583,9 @@ crl::time TcpConnection::pingTime() const {
+ }
+ 
+ crl::time TcpConnection::fullConnectTimeout() const {
++	if (ProxyData::globalSlowMode() && _proxy.usesFakeTls()) {
++		return kFullConnectionTimeout + kSlowConnectTimeoutBudget;
++	}
+ 	return kFullConnectionTimeout;
+ }
+ 
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_fake_tls_policy.h b/Telegram/SourceFiles/mtproto/details/mtproto_fake_tls_policy.h
+new file mode 100644
+index 0000000..796a0d6
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_fake_tls_policy.h
+@@ -0,0 +1,26 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <cstddef>
++#include <type_traits>
++
++namespace MTP::details {
++
++// 0xEE + 16 secret bytes + at least four domain bytes, matching
++// ProxyData validation and TcpConnection::Protocol::Create.
++inline constexpr auto kFakeTlsMinimumSecretSize = std::size_t(21);
++
++template <typename Span>
++[[nodiscard]] constexpr bool IsFakeTlsSecret(const Span &secret) {
++	using Byte = std::remove_cvref_t<decltype(secret.front())>;
++	return secret.size() >= kFakeTlsMinimumSecretSize
++		&& secret.front() == Byte(0xEE);
++}
++
++} // namespace MTP::details
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_slow_connect_policy.h b/Telegram/SourceFiles/mtproto/details/mtproto_slow_connect_policy.h
+new file mode 100644
+index 0000000..02764b2
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_slow_connect_policy.h
+@@ -0,0 +1,65 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include <algorithm>
++#include <chrono>
++
++namespace MTP::details {
++
++inline constexpr auto kSlowConnectMaximumAdditionalDelayMs = 7500;
++inline constexpr auto kSlowConnectSchedulingMarginMs = 500;
++inline constexpr auto kSlowConnectMaximumTimeoutBudgetMs
++	= kSlowConnectMaximumAdditionalDelayMs
++	+ kSlowConnectSchedulingMarginMs;
++inline constexpr auto kSlowConnectMaximumPending = 16;
++inline constexpr auto kSlowConnectMaximumSlots = 128;
++inline constexpr auto kSlowConnectOverflowMinimumDelayMs = 100;
++inline constexpr auto kSlowConnectOverflowMaximumDelayMs = 300;
++
++struct SlowConnectPolicy final {
++	int delay = 0;
++	int jitter = 0;
++};
++
++[[nodiscard]] constexpr SlowConnectPolicy NormalizeSlowConnectPolicy(
++		int delay,
++		int jitter) {
++	const auto normalizedDelay = std::clamp(
++		delay,
++		0,
++		kSlowConnectMaximumAdditionalDelayMs);
++	return {
++		normalizedDelay,
++		std::clamp(
++			jitter,
++			0,
++			kSlowConnectMaximumAdditionalDelayMs - normalizedDelay),
++	};
++}
++
++[[nodiscard]] constexpr auto SlowConnectMaximumAdditionalDelay(
++		int delay,
++		int jitter) {
++	const auto policy = NormalizeSlowConnectPolicy(delay, jitter);
++	return std::chrono::milliseconds(policy.delay + policy.jitter);
++}
++
++[[nodiscard]] constexpr int NormalizeSlowConnectOverflowDelay(int value) {
++	return std::clamp(
++		value,
++		kSlowConnectOverflowMinimumDelayMs,
++		kSlowConnectOverflowMaximumDelayMs);
++}
++
++static_assert(kSlowConnectOverflowMinimumDelayMs > 0);
++static_assert(
++	kSlowConnectOverflowMinimumDelayMs
++		<= kSlowConnectOverflowMaximumDelayMs);
++
++} // namespace MTP::details
+diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
+index f1f2c54..f7b7d82 100644
+--- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
++++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
+@@ -7,12 +7,45 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "mtproto/mtproto_proxy_data.h"
+ 
++#include "base/openssl_help.h"
+ #include "base/qthelp_url.h"
+ #include "base/qt/qt_string_view.h"
++#include "mtproto/details/mtproto_fake_tls_policy.h"
++#include "mtproto/details/mtproto_slow_connect_policy.h"
++
++#include <QtCore/QMutex>
++#include <QtCore/QMutexLocker>
+ 
+ namespace MTP {
+ namespace {
+ 
++QMutex CHelloStatusMutex;
++
++struct StoredCHelloStatus {
++	ProxyData::CHelloStatus value;
++	crl::time connectedAt = 0;
++	crl::time ttlUpdatedAt = 0;
++};
++
++std::vector<StoredCHelloStatus> CHelloStatuses;
++constexpr auto kMaximumStoredCHelloStatuses = 128;
++constexpr auto kMaximumSlowTimingValue = details::kSlowConnectMaximumAdditionalDelayMs;
++
++[[nodiscard]] QByteArray DomainId(bytes::const_span domain) {
++	const auto hash = openssl::Sha256(domain);
++	return QByteArray(
++		reinterpret_cast<const char*>(hash.data()),
++		int(hash.size()));
++}
++
++[[nodiscard]] QByteArray DomainId(const ProxyData &proxy) {
++	if (!proxy.usesFakeTls()) {
++		return {};
++	}
++	const auto secret = proxy.secretFromMtprotoPassword();
++	return DomainId(bytes::make_span(secret).subspan(17));
++}
++
+ [[nodiscard]] bool IsHexMtprotoPassword(const QString &password) {
+ 	const auto size = password.size();
+ 	if (size < 32 || size % 2 == 1) {
+@@ -150,7 +183,10 @@ bool ProxyData::valid() const {
+ }
+ 
+ ProxyData::Status ProxyData::status() const {
+-	if (type == Type::None || host.isEmpty() || !port) {
++	if (type == Type::None
++		|| host.isEmpty()
++		|| port <= 0
++		|| port > 65535) {
+ 		return Status::Invalid;
+ 	} else if (type == Type::Mtproto) {
+ 		return MtprotoPasswordStatus(password);
+@@ -182,6 +218,11 @@ bytes::vector ProxyData::secretFromMtprotoPassword() const {
+ 	return {};
+ }
+ 
++bool ProxyData::usesFakeTls() const {
++	return type == Type::Mtproto
++		&& details::IsFakeTlsSecret(secretFromMtprotoPassword());
++}
++
+ ProxyData::operator bool() const {
+ 	return valid();
+ }
+@@ -245,4 +286,201 @@ QNetworkProxy ToNetworkProxy(const ProxyData &proxy) {
+ 		proxy.password);
+ }
+ 
++std::atomic<ProxyData::CHelloType> ProxyData::global_ch_type = ProxyData::CHelloType::Chromium150;
++std::atomic<bool> ProxyData::global_slow_mode = false;
++std::atomic<int> ProxyData::global_slow_delay = 250;
++std::atomic<int> ProxyData::global_slow_jitter = 150;
++std::atomic<bool> ProxyData::global_prefer_ipv6 = false;
++
++void ProxyData::setGlobalClientHelloRulesType(const ProxyData::CHelloType value) {
++	global_ch_type.store(value, std::memory_order_relaxed);
++}
++
++ProxyData::CHelloType ProxyData::globalClientHelloRulesType() {
++	return global_ch_type.load(std::memory_order_relaxed);
++}
++
++void ProxyData::setGlobalCHelloStatus(const ProxyData::CHelloStatus &status) {
++	const QMutexLocker lock(&CHelloStatusMutex);
++	const auto now = crl::now();
++	const auto sameEndpoint = [&](const StoredCHelloStatus &entry) {
++		return entry.value.port == status.port
++			&& !entry.value.host.compare(status.host, Qt::CaseInsensitive)
++			&& entry.value.domainId == status.domainId;
++	};
++	if (const auto i = ranges::find_if(CHelloStatuses, sameEndpoint);
++		i != end(CHelloStatuses)) {
++		i->value = status;
++		i->connectedAt = now;
++		i->ttlUpdatedAt = now;
++	} else {
++		CHelloStatuses.push_back({ status, now, now });
++		if (CHelloStatuses.size() > kMaximumStoredCHelloStatuses) {
++			const auto oldest = std::min_element(
++				begin(CHelloStatuses),
++				end(CHelloStatuses),
++				[](const auto &a, const auto &b) {
++					return a.connectedAt < b.connectedAt;
++				});
++			CHelloStatuses.erase(oldest);
++		}
++	}
++}
++
++void ProxyData::updateGlobalCHelloStatusLifetime(
++		const QString &host,
++		uint32 port,
++		const QByteArray &domainId,
++		int ttlMinutes) {
++	const QMutexLocker lock(&CHelloStatusMutex);
++	const auto matches = [&](const StoredCHelloStatus &entry) {
++		return entry.value.port == port
++			&& !entry.value.host.compare(host, Qt::CaseInsensitive)
++			&& entry.value.domainId == domainId;
++	};
++	if (const auto i = ranges::find_if(CHelloStatuses, matches);
++		i != end(CHelloStatuses)) {
++		i->value.ttlMinutes = std::max(ttlMinutes, 0);
++		i->value.ttlLeftMinutes = i->value.ttlMinutes;
++		i->ttlUpdatedAt = crl::now();
++	}
++}
++
++void ProxyData::clearGlobalCHelloStatuses() {
++	const QMutexLocker lock(&CHelloStatusMutex);
++	CHelloStatuses.clear();
++}
++
++void ProxyData::setGlobalSlowMode(bool value) {
++	global_slow_mode.store(value, std::memory_order_relaxed);
++}
++
++ProxyData::CHelloStatus ProxyData::globalCHelloStatus(
++		const ProxyData &proxy) {
++	const QMutexLocker lock(&CHelloStatusMutex);
++	const auto domainId = DomainId(proxy);
++	const auto matches = [&](const StoredCHelloStatus &entry) {
++		if (entry.value.port != proxy.port
++			|| entry.value.domainId != domainId) {
++			return false;
++		}
++		const auto isHost = [&](const QString &host) {
++			return !entry.value.host.compare(host, Qt::CaseInsensitive);
++		};
++		return isHost(proxy.host) || std::any_of(
++			begin(proxy.resolvedIPs),
++			end(proxy.resolvedIPs),
++			isHost);
++	};
++	const auto newest = [&] {
++		auto result = (const StoredCHelloStatus*)nullptr;
++		for (const auto &entry : CHelloStatuses) {
++			if (matches(entry)
++				&& (!result || entry.connectedAt >= result->connectedAt)) {
++				result = &entry;
++			}
++		}
++		return result;
++	}();
++	if (!newest) {
++		return CHelloStatus();
++	}
++	auto result = newest->value;
++	if (result.chromium150 && result.ttlLeftMinutes > 0) {
++		const auto elapsedMinutes = std::clamp(
++			(crl::now() - newest->ttlUpdatedAt) / crl::time(60 * 1000),
++			crl::time(0),
++			crl::time(result.ttlLeftMinutes));
++		result.ttlLeftMinutes = std::max(
++			0,
++			result.ttlLeftMinutes - int(elapsedMinutes));
++	}
++	return result;
++}
++
++bool ProxyData::globalSlowMode() {
++	return global_slow_mode.load(std::memory_order_relaxed);
++}
++
++void ProxyData::setGlobalSlowDelay(int value) {
++	const auto delay = std::clamp(value, 0, kMaximumSlowTimingValue);
++	global_slow_delay.store(delay, std::memory_order_relaxed);
++	const auto jitter = global_slow_jitter.load(std::memory_order_relaxed);
++	global_slow_jitter.store(
++		std::min(jitter, kMaximumSlowTimingValue - delay),
++		std::memory_order_relaxed);
++}
++
++int ProxyData::globalSlowDelay() {
++	return global_slow_delay.load(std::memory_order_relaxed);
++}
++
++void ProxyData::setGlobalSlowJitter(int value) {
++	const auto delay = global_slow_delay.load(std::memory_order_relaxed);
++	global_slow_jitter.store(
++		std::clamp(value, 0, kMaximumSlowTimingValue - delay),
++		std::memory_order_relaxed);
++}
++
++int ProxyData::globalSlowJitter() {
++	return global_slow_jitter.load(std::memory_order_relaxed);
++}
++
++void ProxyData::setGlobalPreferIPv6(bool value) {
++	global_prefer_ipv6.store(value, std::memory_order_relaxed);
++}
++
++bool ProxyData::globalPreferIPv6() {
++	return global_prefer_ipv6.load(std::memory_order_relaxed);
++}
++
++bool ProxyData::addressComesFirst(
++		const QString &first,
++		const QString &second,
++		bool preferIPv6) {
++	const auto firstV6 = qthelp::is_ipv6(first);
++	const auto secondV6 = qthelp::is_ipv6(second);
++	return (firstV6 == secondV6)
++		? false
++		: (firstV6 == preferIPv6);
++}
++
++QStringList ProxyData::orderResolvedAddresses(
++		const QStringList &addresses,
++		const QString &host,
++		uint32 port,
++		bool preferIPv6) {
++	static auto mutex = QMutex();
++	using Key = std::tuple<QString, uint32, bool>;
++	static auto cursors = std::map<Key, std::size_t>();
++	constexpr auto kMaximumCursors = std::size_t(256);
++
++	auto ipv4 = QStringList();
++	auto ipv6 = QStringList();
++	for (const auto &address : addresses) {
++		auto &bucket = qthelp::is_ipv6(address) ? ipv6 : ipv4;
++		if (!bucket.contains(address, Qt::CaseInsensitive)) {
++			bucket.push_back(address);
++		}
++	}
++	const auto rotateBucket = [&](QStringList &bucket, bool isIpv6) {
++		if (bucket.size() < 2) {
++			return;
++		}
++		const auto lock = QMutexLocker(&mutex);
++		if (cursors.size() >= kMaximumCursors) {
++			cursors.clear();
++		}
++		auto &cursor = cursors[{ host.toLower(), port, isIpv6 }];
++		const auto offset = int(cursor++ % std::size_t(bucket.size()));
++		std::rotate(
++			bucket.begin(),
++			bucket.begin() + offset,
++			bucket.end());
++	};
++	rotateBucket(ipv4, false);
++	rotateBucket(ipv6, true);
++	return preferIPv6 ? (ipv6 + ipv4) : (ipv4 + ipv6);
++}
++
+ } // namespace MTP
+diff --git a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
+index 367ee3f..ac0c056 100644
+--- a/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
++++ b/Telegram/SourceFiles/mtproto/mtproto_proxy_data.h
+@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include <QtNetwork/QNetworkProxy>
+ 
++#include <atomic>
++
+ namespace MTP {
+ 
+ struct ProxyData {
+@@ -29,6 +31,29 @@ struct ProxyData {
+ 		IncorrectSecret,
+ 		Invalid,
+ 	};
++	enum class CHelloType
++	{
++		Firefox, // JA3 & JA4 matches FF 151
++		Chrome, // Chrome, vanilla default
++		Custom,
++		SafariMac, // Safari macOS 26.4 (with grease/alpn randomization)
++		YandexGost, // Yandex Browser with GOST cipher suites
++		Chromium150, // Ungoogled Chromium 150-like, based on tls.peet.ws captures
++		RANDOM
++	};
++	struct CHelloStatus {
++		CHelloType configured = CHelloType::Chromium150;
++		CHelloType actual = CHelloType::Chromium150;
++		QString host;
++		uint32 port = 0;
++		QByteArray domainId;
++		bool random = false;
++		bool chromium150 = false;
++		bool resumed = false;
++		int ttlMinutes = 0;
++		int ttlLeftMinutes = 0;
++		bool used = false;
++	};
+ 
+ 	Type type = Type::None;
+ 	QString host;
+@@ -43,6 +68,7 @@ struct ProxyData {
+ 	[[nodiscard]] bool supportsCalls() const;
+ 	[[nodiscard]] bool tryCustomResolve() const;
+ 	[[nodiscard]] bytes::vector secretFromMtprotoPassword() const;
++	[[nodiscard]] bool usesFakeTls() const;
+ 	[[nodiscard]] explicit operator bool() const;
+ 	[[nodiscard]] bool operator==(const ProxyData &other) const;
+ 	[[nodiscard]] bool operator!=(const ProxyData &other) const;
+@@ -51,6 +77,46 @@ struct ProxyData {
+ 	[[nodiscard]] static Status MtprotoPasswordStatus(
+ 		const QString &password);
+ 
++	static void setGlobalClientHelloRulesType(const ProxyData::CHelloType ch_type);
++	[[nodiscard]] static ProxyData::CHelloType globalClientHelloRulesType();
++
++	static void setGlobalCHelloStatus(const ProxyData::CHelloStatus &status);
++	static void updateGlobalCHelloStatusLifetime(
++		const QString &host,
++		uint32 port,
++		const QByteArray &domainId,
++		int ttlMinutes);
++	static void clearGlobalCHelloStatuses();
++	[[nodiscard]] static ProxyData::CHelloStatus globalCHelloStatus(
++		const ProxyData &proxy);
++
++	static void setGlobalSlowMode(bool value);
++	[[nodiscard]] static bool globalSlowMode();
++
++	static void setGlobalSlowDelay(int value);
++	[[nodiscard]] static int globalSlowDelay();
++
++	static void setGlobalSlowJitter(int value);
++	[[nodiscard]] static int globalSlowJitter();
++
++	static void setGlobalPreferIPv6(bool value);
++	[[nodiscard]] static bool globalPreferIPv6();
++	[[nodiscard]] static bool addressComesFirst(
++		const QString &first,
++		const QString &second,
++		bool preferIPv6);
++	[[nodiscard]] static QStringList orderResolvedAddresses(
++		const QStringList &addresses,
++		const QString &host,
++		uint32 port,
++		bool preferIPv6);
++
++private:
++	static std::atomic<ProxyData::CHelloType> global_ch_type;
++	static std::atomic<bool> global_slow_mode;
++	static std::atomic<int> global_slow_delay;
++	static std::atomic<int> global_slow_jitter;
++	static std::atomic<bool> global_prefer_ipv6;
+ };
+ 
+ [[nodiscard]] ProxyData ToDirectIpProxy(
+diff --git a/Telegram/SourceFiles/mtproto/session_private.cpp b/Telegram/SourceFiles/mtproto/session_private.cpp
+index 86be336..28e5228 100644
+--- a/Telegram/SourceFiles/mtproto/session_private.cpp
++++ b/Telegram/SourceFiles/mtproto/session_private.cpp
+@@ -1109,7 +1109,18 @@ void SessionPrivate::connectToServer(bool afterConfig) {
+ 	_pingId = _pingMsgId = _pingIdToSend = _pingSendAt = 0;
+ 	_pingSender.cancel();
+ 
+-	_waitForConnectedTimer.callOnce(_waitForConnected);
++	auto waitForConnected = _waitForConnected;
++	const auto &proxy = _options->proxy;
++	const auto slowFakeTls = ProxyData::globalSlowMode()
++		&& proxy.usesFakeTls();
++	if (slowFakeTls) {
++		for (const auto &connection : _testConnections) {
++			accumulate_max(
++				waitForConnected,
++				connection.data->fullConnectTimeout() + crl::time(500));
++		}
++	}
++	_waitForConnectedTimer.callOnce(waitForConnected);
+ }
+ 
+ void SessionPrivate::restart() {

@@ -1,13 +1,16 @@
 diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
-index 88b508c4c1..2e298de63a 100644
+index b695d6b..3a52cc9 100644
 --- a/Telegram/CMakeLists.txt
 +++ b/Telegram/CMakeLists.txt
-@@ -90,6 +90,12 @@ PRIVATE
+@@ -90,6 +90,15 @@ PRIVATE
      desktop-app::external_xxhash
  )
  
 +if (DESKTOP_APP_MTPROTO_PROFILE_TESTS)
 +    target_compile_definitions(Telegram PRIVATE
++        DESKTOP_APP_MTPROTO_PROFILE_TESTS
++    )
++    target_compile_definitions(td_mtproto PRIVATE
 +        DESKTOP_APP_MTPROTO_PROFILE_TESTS
 +    )
 +endif()
@@ -16,21 +19,19 @@ index 88b508c4c1..2e298de63a 100644
      telegram_add_apple_swift_runtime(Telegram)
  endif()
 diff --git a/Telegram/SourceFiles/main.cpp b/Telegram/SourceFiles/main.cpp
-index d3d938c47f..5b3109dfa4 100644
+index d3d938c..d50118c 100644
 --- a/Telegram/SourceFiles/main.cpp
 +++ b/Telegram/SourceFiles/main.cpp
-@@ -7,7 +7,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,7 +7,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "core/launcher.h"
  
 +#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
++#include "mtproto/details/mtproto_tls_socket.h"
++
 +#include <QtCore/QCoreApplication>
 +
 +#include <cstring>
-+
-+namespace MTP::details {
-+[[nodiscard]] bool ValidateClientHelloProfilesForTests();
-+} // namespace MTP::details
 +#endif
 +
  int main(int argc, char *argv[]) {

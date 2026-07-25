@@ -1,0 +1,438 @@
+diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
+index 9be1f88..0031e94 100644
+--- a/Telegram/SourceFiles/core/application.cpp
++++ b/Telegram/SourceFiles/core/application.cpp
+@@ -845,6 +845,16 @@ void Application::setCurrentProxy(
+ 	proxyRotationSettingsChanged();
+ }
+ 
++void Application::restartMtpForProxyConfigurationChange() {
++	const auto &settings = _private->settings.proxy();
++	const auto current = settings.isEnabled()
++		? settings.selected()
++		: MTP::ProxyData();
++	// Equal endpoints intentionally request a restart without reinitializing
++	// the authorization connection for every account.
++	_proxyChanges.fire({ current, current });
++}
++
+ void Application::proxyRotationSettingsChanged() {
+ 	_private->proxyRotation->settingsChanged();
+ }
+diff --git a/Telegram/SourceFiles/core/application.h b/Telegram/SourceFiles/core/application.h
+index 48355e1..1c8d72b 100644
+--- a/Telegram/SourceFiles/core/application.h
++++ b/Telegram/SourceFiles/core/application.h
+@@ -220,6 +220,7 @@ public:
+ 	void setCurrentProxy(
+ 		const MTP::ProxyData &proxy,
+ 		MTP::ProxyData::Settings settings);
++	void restartMtpForProxyConfigurationChange();
+ 	void proxyRotationSettingsChanged();
+ 	void checkProxyRotation(not_null<Main::Account*> account, int32 state);
+ 	[[nodiscard]] rpl::producer<ProxyChange> proxyChanges() const;
+diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h b/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h
+new file mode 100644
+index 0000000..7143d76
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto/details/mtproto_proxy_check_coordinator_policy.h
+@@ -0,0 +1,48 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++namespace MTP::details {
++
++class ProxyCheckCoordinatorState final {
++public:
++	[[nodiscard]] constexpr bool canStart(int maximum) const {
++		return maximum > 0 && _active < maximum;
++	}
++
++	[[nodiscard]] constexpr bool start(int maximum) {
++		if (!canStart(maximum)) {
++			return false;
++		}
++		++_active;
++		return true;
++	}
++
++	[[nodiscard]] constexpr bool finish(bool wasActive) {
++		if (!wasActive) {
++			return true;
++		} else if (_active <= 0) {
++			return false;
++		}
++		--_active;
++		return true;
++	}
++
++	[[nodiscard]] constexpr int active() const {
++		return _active;
++	}
++
++	[[nodiscard]] constexpr bool valid() const {
++		return _active >= 0;
++	}
++
++private:
++	int _active = 0;
++};
++
++} // namespace MTP::details
+diff --git a/Telegram/SourceFiles/mtproto/mtp_instance.cpp b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+index a7dd178..431e082 100644
+--- a/Telegram/SourceFiles/mtproto/mtp_instance.cpp
++++ b/Telegram/SourceFiles/mtproto/mtp_instance.cpp
+@@ -408,7 +408,11 @@ void Instance::Private::applyDomainIps(
+ 			return false;
+ 		}
+ 		proxy.resolvedExpireAt = expireAt;
+-		auto copy = ips;
++		auto copy = ProxyData::orderResolvedAddresses(
++			ips,
++			proxy.host,
++			proxy.port,
++			ProxyData::globalPreferIPv6());
+ 		auto &current = proxy.resolvedIPs;
+ 		const auto i = ranges::remove_if(current, [&](const QString &ip) {
+ 			const auto index = copy.indexOf(ip);
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.cpp b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+index 831c845..0174e24 100644
+--- a/Telegram/SourceFiles/mtproto/proxy_check.cpp
++++ b/Telegram/SourceFiles/mtproto/proxy_check.cpp
+@@ -6,14 +6,278 @@ For license and copyright information please follow this link:
+ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ */
+ #include "mtproto/proxy_check.h"
++#include "mtproto/details/mtproto_proxy_check_coordinator_policy.h"
+ 
++#include "base/timer.h"
+ #include "mtproto/facade.h"
+ #include "mtproto/mtproto_dc_options.h"
+ 
++#include <QtCore/QCoreApplication>
++#include <QtCore/QPointer>
++#include <QtCore/QThread>
++
++#include <algorithm>
++#include <optional>
++
+ namespace MTP {
+ 
+ using Connection = details::AbstractConnection;
+ 
++class ProxyCheckHandle final {
++public:
++	ProxyCheckHandle(Fn<void(int)> done, Fn<void()> fail)
++	: done(std::move(done))
++	, fail(std::move(fail)) {
++	}
++
++	Fn<void(int)> done;
++	Fn<void()> fail;
++};
++
++namespace {
++
++constexpr auto kMaxConcurrentProxyChecks = 2;
++constexpr auto kProxyCheckLifetime = 20 * crl::time(1000);
++constexpr auto kProxyCheckTimerInterval = crl::time(1000);
++
++void AssertProxyCheckCoordinatorThread() {
++	const auto application = QCoreApplication::instance();
++	Expects(application != nullptr);
++	Expects(QThread::currentThread() == application->thread());
++}
++
++class ProxyCheckCoordinator final {
++public:
++	ProxyCheckCoordinator()
++	: _timer([=] { pruneExpired(); })
++	, _queueTimer([=] { startQueued(); }) {
++	}
++
++	ProxyCheckHandlePointer schedule(
++			not_null<Instance*> mtproto,
++			const ProxyData &proxy,
++			bool tryIPv6,
++			Fn<void(int)> done,
++			Fn<void()> fail) {
++		AssertProxyCheckCoordinatorThread();
++		auto handle = std::make_shared<ProxyCheckHandle>(
++			std::move(done),
++			std::move(fail));
++		for (const auto &entry : _entries) {
++			if (entry->mtproto == mtproto.get()
++				&& entry->proxy == proxy
++				&& entry->tryIPv6 == tryIPv6) {
++				entry->listeners.push_back(handle);
++				return handle;
++			}
++		}
++		auto entry = std::make_unique<Entry>();
++		entry->id = nextId();
++		entry->mtproto = mtproto.get();
++		entry->proxy = proxy;
++		entry->tryIPv6 = tryIPv6;
++		entry->listeners.push_back(handle);
++		_entries.push_back(std::move(entry));
++		startQueued();
++		return handle;
++	}
++
++private:
++	struct Entry {
++		uint64 id = 0;
++		QPointer<Instance> mtproto;
++		ProxyData proxy;
++		bool tryIPv6 = false;
++		bool active = false;
++		bool starting = false;
++		bool finished = false;
++		crl::time startedAt = 0;
++		ProxyCheckConnection v4;
++		ProxyCheckConnection v6;
++		std::vector<std::weak_ptr<ProxyCheckHandle>> listeners;
++		std::optional<int> pendingPing;
++	};
++
++	[[nodiscard]] Entry *find(uint64 id) {
++		const auto i = ranges::find(
++			_entries,
++			id,
++			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
++		return (i == end(_entries)) ? nullptr : i->get();
++	}
++
++	[[nodiscard]] uint64 nextId() {
++		do {
++			++_idCounter;
++		} while (!_idCounter || find(_idCounter));
++		return _idCounter;
++	}
++
++	void startQueued() {
++		AssertProxyCheckCoordinatorThread();
++		while (_state.canStart(kMaxConcurrentProxyChecks)) {
++			const auto i = ranges::find(
++				_entries,
++				false,
++				[](const std::unique_ptr<Entry> &entry) {
++					return entry->active;
++				});
++			if (i == end(_entries)) {
++				break;
++			}
++			auto &entry = **i;
++			entry.listeners.erase(
++				std::remove_if(
++					begin(entry.listeners),
++					end(entry.listeners),
++					[](const auto &listener) { return listener.expired(); }),
++				end(entry.listeners));
++			if (entry.listeners.empty() || !entry.mtproto) {
++				_entries.erase(i);
++				continue;
++			}
++			const auto mtproto = entry.mtproto.data();
++			if (!mtproto) {
++				_entries.erase(i);
++				continue;
++			}
++			entry.active = true;
++			entry.starting = true;
++			entry.startedAt = crl::now();
++			const auto slotStarted = _state.start(kMaxConcurrentProxyChecks);
++			Expects(slotStarted);
++			const auto id = entry.id;
++			StartProxyCheck(
++				not_null<Instance*>(mtproto),
++				entry.proxy,
++				entry.tryIPv6,
++				entry.v4,
++				entry.v6,
++				[=](Connection *raw, int ping) {
++					checkDone(id, raw, ping);
++				},
++				[=](Connection *raw) {
++					checkFailed(id, raw);
++				});
++			const auto started = find(id);
++			if (!started) {
++				continue;
++			}
++			started->starting = false;
++			if (started->pendingPing) {
++				finish(id, started->pendingPing);
++			} else if (!HasProxyCheckers(started->v4, started->v6)) {
++				finish(id, std::nullopt);
++			}
++		}
++		armTimer();
++	}
++
++	void armTimer() {
++		if (_state.active() > 0 && !_timer.isActive()) {
++			_timer.callOnce(kProxyCheckTimerInterval);
++		}
++	}
++
++	void pruneExpired() {
++		AssertProxyCheckCoordinatorThread();
++		const auto now = crl::now();
++		auto expired = std::vector<uint64>();
++		for (auto &entry : _entries) {
++			entry->listeners.erase(
++				std::remove_if(
++					begin(entry->listeners),
++					end(entry->listeners),
++					[](const auto &listener) { return listener.expired(); }),
++				end(entry->listeners));
++			if (entry->active
++				&& (!entry->mtproto
++					|| entry->listeners.empty()
++					|| (now - entry->startedAt >= kProxyCheckLifetime))) {
++				expired.push_back(entry->id);
++			}
++		}
++		for (const auto id : expired) {
++			finish(id, std::nullopt);
++		}
++		armTimer();
++	}
++
++	void checkDone(uint64 id, not_null<Connection*> raw, int ping) {
++		AssertProxyCheckCoordinatorThread();
++		const auto entry = find(id);
++		if (!entry || entry->finished) {
++			return;
++		}
++		DropProxyChecker(entry->v4, entry->v6, raw);
++		const auto normalized = std::max(ping, 1);
++		if (entry->starting) {
++			entry->pendingPing = normalized;
++		} else {
++			finish(id, normalized);
++		}
++	}
++
++	void checkFailed(uint64 id, not_null<Connection*> raw) {
++		AssertProxyCheckCoordinatorThread();
++		const auto entry = find(id);
++		if (!entry || entry->finished) {
++			return;
++		}
++		DropProxyChecker(entry->v4, entry->v6, raw);
++		if (!entry->starting && !HasProxyCheckers(entry->v4, entry->v6)) {
++			finish(id, std::nullopt);
++		}
++	}
++
++	void finish(uint64 id, std::optional<int> ping) {
++		AssertProxyCheckCoordinatorThread();
++		const auto entry = find(id);
++		if (!entry || entry->finished) {
++			return;
++		}
++		entry->finished = true;
++		ResetProxyCheckers(entry->v4, entry->v6);
++		auto listeners = std::move(entry->listeners);
++		const auto wasActive = entry->active;
++		const auto i = ranges::find(
++			_entries,
++			id,
++			[](const std::unique_ptr<Entry> &entry) { return entry->id; });
++		_entries.erase(i);
++		const auto finished = _state.finish(wasActive);
++		Expects(finished);
++		Expects(_state.valid());
++		for (const auto &weak : listeners) {
++			if (const auto strong = weak.lock()) {
++				if (ping) {
++					if (strong->done) {
++						strong->done(*ping);
++					}
++				} else if (strong->fail) {
++					strong->fail();
++				}
++			}
++		}
++		if (!_queueTimer.isActive()) {
++			_queueTimer.callOnce(0);
++		}
++	}
++
++	uint64 _idCounter = 0;
++	details::ProxyCheckCoordinatorState _state;
++	std::vector<std::unique_ptr<Entry>> _entries;
++	base::Timer _timer;
++	base::Timer _queueTimer;
++};
++
++[[nodiscard]] ProxyCheckCoordinator &Coordinator() {
++	static const auto result = new ProxyCheckCoordinator();
++	return *result;
++}
++
++} // namespace
++
+ void ResetProxyCheckers(
+ 		ProxyCheckConnection &v4,
+ 		ProxyCheckConnection &v6) {
+@@ -108,4 +372,18 @@ void StartProxyCheck(
+ 	tryConnect(v6, Variants::IPv6);
+ }
+ 
++ProxyCheckHandlePointer ScheduleProxyCheck(
++		not_null<Instance*> mtproto,
++		const ProxyData &proxy,
++		bool tryIPv6,
++		Fn<void(int ping)> done,
++		Fn<void()> fail) {
++	return Coordinator().schedule(
++		mtproto,
++		proxy,
++		tryIPv6,
++		std::move(done),
++		std::move(fail));
++}
++
+ } // namespace MTP
+diff --git a/Telegram/SourceFiles/mtproto/proxy_check.h b/Telegram/SourceFiles/mtproto/proxy_check.h
+index 1cbfb15..3f17aa8 100644
+--- a/Telegram/SourceFiles/mtproto/proxy_check.h
++++ b/Telegram/SourceFiles/mtproto/proxy_check.h
+@@ -9,10 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include "mtproto/connection_abstract.h"
+ 
++#include <memory>
++
+ namespace MTP {
+ 
+ using ProxyCheckConnection = details::ConnectionPointer;
+ 
++class ProxyCheckHandle;
++using ProxyCheckHandlePointer = std::shared_ptr<ProxyCheckHandle>;
++
+ void ResetProxyCheckers(
+ 	ProxyCheckConnection &v4,
+ 	ProxyCheckConnection &v6);
+@@ -32,4 +37,11 @@ void StartProxyCheck(
+ 	Fn<void(details::AbstractConnection *raw, int ping)> done,
+ 	Fn<void(details::AbstractConnection *raw)> fail);
+ 
++[[nodiscard]] ProxyCheckHandlePointer ScheduleProxyCheck(
++	not_null<Instance*> mtproto,
++	const ProxyData &proxy,
++	bool tryIPv6,
++	Fn<void(int ping)> done,
++	Fn<void()> fail);
++
+ } // namespace MTP
