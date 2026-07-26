@@ -632,6 +632,25 @@ jobs:
           Write-Host "Free disk after cleanup: $after GiB"
           Write-Host "Freed by cleanup: $freed GiB"
 
+          # Every drive, plus the pagefile, because the build writes objects
+          # to C: through the TBuild junction and competes with anything else
+          # that reserves space there.
+          Get-PSDrive -PSProvider FileSystem |
+            Where-Object { $_.Used -ne $null } |
+            Select-Object `
+              Name, `
+              @{ n = "UsedGiB"; e = { [math]::Round($_.Used / 1GB, 2) } }, `
+              @{ n = "FreeGiB"; e = { [math]::Round($_.Free / 1GB, 2) } } |
+            Format-Table -AutoSize |
+            Out-String |
+            Write-Host
+
+          Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue |
+            Select-Object Name, AllocatedBaseSize, CurrentUsage, PeakUsage |
+            Format-Table -AutoSize |
+            Out-String |
+            Write-Host
+
           if ($after -lt 18) {
             Write-Warning (
               "Less than 18 GiB is free before dependency build. " +
@@ -640,16 +659,6 @@ jobs:
           }
 
           $ErrorActionPreference = "Stop"
-
-      # link.exe /LTCG holds the whole program in memory. The runner has 16 GiB
-      # of RAM, which is not enough on its own, so back the link with swap
-      # instead of lowering the compile parallelism.
-      - name: Enlarge the pagefile for the link step
-        uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
-        with:
-          minimum-size: 16GB
-          maximum-size: 32GB
-          disk-root: "C:"
 
       - name: Configure NuGet sources
         run: |

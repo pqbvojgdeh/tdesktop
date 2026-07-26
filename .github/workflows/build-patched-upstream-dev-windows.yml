@@ -608,7 +608,9 @@ jobs:
   # Primary profile: the same interprocedural optimization the official
   # Telegram Desktop release build uses (Telegram/build/build.bat passes
   # -DDESKTOP_APP_ENABLE_LTO=ON). The LTCG link is memory bound, so the
-  # profile job caps concurrent links at one and enlarges the pagefile.
+  # profile job caps concurrent links at one through a Ninja job pool.
+  # It is not backed by a larger pagefile: the runner writes the whole build
+  # to C:, and reserving swap there starved the compiler of disk instead.
   release_ninja_lto:
     name: Optimized Release — Ninja / IPO-LTO / parallel 4
     needs:
