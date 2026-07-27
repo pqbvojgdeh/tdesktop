@@ -849,7 +849,8 @@ jobs:
               Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto/session_private.cpp.obj ^
               Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu.cpp.obj ^
               Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/window/window_main_menu_helpers.cpp.obj ^
-              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/main.cpp.obj
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/main.cpp.obj ^
+              Telegram/CMakeFiles/Telegram.dir/Release/SourceFiles/mtproto_profile_test_entry.cpp.obj
             if errorlevel 1 exit /b 1
           )
 
