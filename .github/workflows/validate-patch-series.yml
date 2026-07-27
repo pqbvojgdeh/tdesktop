@@ -242,7 +242,14 @@ jobs:
           grep -Fq 'target_sources(Telegram PRIVATE' "$cmake_root"
           test -f "$entry_point"
           grep -Fq 'OptionalTestEntryPoint' "source/Telegram/SourceFiles/main.cpp"
-          grep -Fq 'cmake -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ..\out' "$build_profile"
+          # The relink must address the build tree by the canonical path the
+          # first configure recorded. Reconfiguring through the TBuild
+          # junction rewrites every compile command and rebuilds everything.
+          grep -Fq '"%USERPROFILE%\TBuild\%REPO_NAME%\out"' "$build_profile"
+          if grep -Fq 'DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ..\out' "$build_profile"; then
+            echo "::error::The relink reconfigures through the workspace junction again."
+            exit 1
+          fi
           grep -Fq 'kProxySettingsMaximumClientHelloType' "$settings_proxy"
 
           # Values a standalone policy test cannot reach.

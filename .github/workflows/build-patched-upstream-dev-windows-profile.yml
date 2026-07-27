@@ -865,11 +865,14 @@ jobs:
             if errorlevel 1 exit /b 1
 
             rem Remove the conditional test entrypoint from the distributed EXE.
-            rem Reconfigure through the existing build tree. configure.py
-            rem canonicalizes the source path through the TBuild junction, so
-            rem passing "." as a new source path can make CMake compare the
-            rem D:\ workspace alias with the cached C:\Users path and reject it.
-            cmake -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ..\out
+            rem The build tree is addressed by the same canonical path the
+            rem first configure recorded. TBUILD is a junction, so "..\out"
+            rem names the same directory through the D:\ workspace alias, and
+            rem reconfiguring that way rewrote every compile command with the
+            rem other spelling. Ninja then saw all commands change and rebuilt
+            rem the whole application instead of relinking it.
+            cmake -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ^
+              "%USERPROFILE%\TBuild\%REPO_NAME%\out"
             if errorlevel 1 exit /b 1
 
             cmake --build ..\out ^
