@@ -660,6 +660,20 @@ jobs:
 
           $ErrorActionPreference = "Stop"
 
+      # The runner ships with no pagefile at all, so LTCG code generation had
+      # only the 16 GiB of RAM and died with "compiler is out of heap space in
+      # pass 2". The swap goes on D:, which the measured disk report showed
+      # holds 147 GiB free and which the build never writes to — the whole
+      # build lives on C: through the TBuild junction, and reserving swap
+      # there starved the compiler of disk instead.
+      - name: Back the LTCG link with swap on the spare drive
+        if: ${{ inputs.lto_mode == 'on' }}
+        uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
+        with:
+          minimum-size: 32GB
+          maximum-size: 64GB
+          disk-root: "D:"
+
       - name: Configure NuGet sources
         run: |
           nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
@@ -760,6 +774,11 @@ jobs:
           set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF"
           if /I "%BUILD_LTO_MODE%"=="on" set "LTO_FLAGS=-D CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -D CMAKE_EXE_LINKER_FLAGS_RELEASE=/CGTHREADS:2"
 
+          rem /Gy and /Gw only let the linker drop unused functions and data
+          rem through the /OPT:REF that cmake_helpers already sets, so they can
+          rem shrink the binary but never grow it. /Ob2 is the CMake default
+          rem and is kept on purpose: /Ob3 was measured here and grew the
+          rem packaged payload from 217 MiB to 232 MiB.
           set "MTPROTO_TEST_FLAGS="
           rem Test code is enabled only for the first verification link.
           rem The same build tree is then reconfigured with the option OFF
@@ -795,7 +814,7 @@ jobs:
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
               -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
-              -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob3 /Gy /Gw /DNDEBUG" ^
+              -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Gy /Gw /DNDEBUG" ^
               -D CMAKE_JOB_POOLS=compile=%BUILD_PARALLEL%;link=1 ^
               -D CMAKE_JOB_POOL_COMPILE=compile ^
               -D CMAKE_JOB_POOL_LINK=link ^
