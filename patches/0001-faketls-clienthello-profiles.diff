@@ -2008,10 +2008,10 @@ index 448190a..d0c1f95 100644
  }
  
 diff --git a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-index d4a9008..f17fbe0 100644
+index d4a9008..5092fb2 100644
 --- a/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
 +++ b/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.h
-@@ -9,8 +9,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -9,8 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  
  #include "mtproto/details/mtproto_abstract_socket.h"
  
@@ -2019,14 +2019,15 @@ index d4a9008..f17fbe0 100644
 +
  namespace MTP::details {
  
-+#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
++// Defined only in a DESKTOP_APP_MTPROTO_PROFILE_TESTS build of td_mtproto.
++// The declaration is unconditional so that the optional test entry point,
++// which is compiled without that definition, can still call it.
 +[[nodiscard]] bool ValidateClientHelloProfilesForTests();
-+#endif
 +
  class TlsSocket final : public AbstractSocket {
  public:
  	TlsSocket(
-@@ -57,11 +63,17 @@ private:
+@@ -57,11 +64,17 @@ private:
  
  	const bytes::vector _secret;
  	QTcpSocket _socket;

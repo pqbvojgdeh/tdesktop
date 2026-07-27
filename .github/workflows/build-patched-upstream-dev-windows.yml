@@ -15,6 +15,14 @@ on:
         options:
           - vanilla
           - patched
+      enable_lto:
+        description: >-
+          Also try an experimental IPO/LTO build. It has never finished inside
+          the six hour job limit: /GL alone spent over five and a half hours on
+          the compile without reaching the link.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -605,17 +613,49 @@ jobs:
             echo "- Qt exact hit: \`${{ steps.qt.outputs.cache-hit }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Primary profile: the same interprocedural optimization the official
-  # Telegram Desktop release build uses (Telegram/build/build.bat passes
-  # -DDESKTOP_APP_ENABLE_LTO=ON). The LTCG link is memory bound, so the
-  # profile job caps concurrent links at one through a Ninja job pool and
-  # puts swap on D:, which is otherwise unused. The runner has no pagefile
-  # of its own, so the first LTCG attempt ran out of heap with 16 GiB of RAM.
-  release_ninja_lto:
-    name: Optimized Release — Ninja / IPO-LTO / parallel 4
+  # Primary profile. LTO is deliberately not used here: a measured attempt
+  # spent more than five and a half hours on the /GL compile alone and was
+  # killed by the six hour job limit before it even reached the link, and the
+  # packaging relink would have needed a second LTCG pass on top of that.
+  # Parallel 4 matches the 4 vCPU public runner; the LTO attempt proved the
+  # runner survives four concurrent compilations of larger /GL objects, so it
+  # is safe for the smaller ones produced here.
+  release_ninja_p4:
+    name: Release — Ninja / no LTO / parallel 4
     needs:
       - source
       - prepare_dependencies
+
+    permissions:
+      contents: read
+
+    uses: ./.github/workflows/build-patched-upstream-dev-windows-profile.yml
+    secrets: inherit
+
+    with:
+      source_sha: ${{ needs.source.outputs.source_sha }}
+      source_repository: ${{ needs.source.outputs.source_repository }}
+      variant: ${{ inputs.variant }}
+      cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
+      runner: windows-2025-vs2026
+      profile: release-ninja-p4
+      profile_title: Release / Ninja Multi-Config / no IPO-LTO / parallel 4
+      generator: ninja
+      # Quoted on purpose: an unquoted on/off is a YAML boolean in some
+      # parsers, and the build script compares this value against "on".
+      lto_mode: "off"
+      parallel: 4
+      require_vs2026: true
+
+  # Opt-in experiment, off by default. It runs beside the primary profile
+  # rather than before it, so a six hour failure costs wall clock only when
+  # somebody asks for it. Its package is preferred when it does succeed.
+  release_ninja_lto:
+    name: Experimental Release — Ninja / IPO-LTO / parallel 4
+    needs:
+      - source
+      - prepare_dependencies
+    if: ${{ inputs.enable_lto }}
 
     permissions:
       contents: read
@@ -630,49 +670,10 @@ jobs:
       cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
       runner: windows-2025-vs2026
       profile: release-ninja-lto
-      profile_title: Optimized Release / Ninja Multi-Config / IPO-LTO / parallel 4
+      profile_title: Experimental Release / Ninja Multi-Config / IPO-LTO / parallel 4
       generator: ninja
-      # Quoted on purpose: an unquoted on/off is a YAML boolean in some
-      # parsers, and the build script compares this value against "on".
       lto_mode: "on"
       parallel: 4
-      require_vs2026: true
-
-  # Fallback profile: runs only when the optimized one produced no package.
-  # This is deliberately the previously proven configuration (no LTO,
-  # parallel 2), so it stays valid even if the optimized profile fails
-  # because of the raised parallelism rather than because of LTO.
-  release_ninja_p2:
-    name: Fallback Release — Ninja / no LTO / parallel 2
-    needs:
-      - source
-      - prepare_dependencies
-      - release_ninja_lto
-    if: >-
-      ${{
-        always() &&
-        needs.source.result == 'success' &&
-        needs.prepare_dependencies.result == 'success' &&
-        needs.release_ninja_lto.outputs.built != 'true'
-      }}
-
-    permissions:
-      contents: read
-
-    uses: ./.github/workflows/build-patched-upstream-dev-windows-profile.yml
-    secrets: inherit
-
-    with:
-      source_sha: ${{ needs.source.outputs.source_sha }}
-      source_repository: ${{ needs.source.outputs.source_repository }}
-      variant: ${{ inputs.variant }}
-      cache_key: ${{ needs.prepare_dependencies.outputs.cache_key }}
-      runner: windows-2025-vs2026
-      profile: release-ninja-p2
-      profile_title: Fallback Release / Ninja Multi-Config / no IPO-LTO / parallel 2
-      generator: ninja
-      lto_mode: "off"
-      parallel: 2
       require_vs2026: true
 
   publish_release:
@@ -681,7 +682,7 @@ jobs:
       - source
       - prepare_dependencies
       - release_ninja_lto
-      - release_ninja_p2
+      - release_ninja_p4
     if: >-
       ${{
         always() &&
@@ -689,7 +690,7 @@ jobs:
         needs.prepare_dependencies.result == 'success' &&
         (
           needs.release_ninja_lto.outputs.built == 'true' ||
-          needs.release_ninja_p2.outputs.built == 'true'
+          needs.release_ninja_p4.outputs.built == 'true'
         )
       }}
     runs-on: ubuntu-latest
@@ -710,14 +711,14 @@ jobs:
           SHORT_SHA: ${{ needs.source.outputs.short_sha }}
           VARIANT: ${{ inputs.variant }}
           LTO_BUILT: ${{ needs.release_ninja_lto.outputs.built }}
-          FALLBACK_BUILT: ${{ needs.release_ninja_p2.outputs.built }}
+          STANDARD_BUILT: ${{ needs.release_ninja_p4.outputs.built }}
         run: |
           set -euo pipefail
 
           if [[ "$LTO_BUILT" == "true" ]]; then
             profile="release-ninja-lto"
-          elif [[ "$FALLBACK_BUILT" == "true" ]]; then
-            profile="release-ninja-p2"
+          elif [[ "$STANDARD_BUILT" == "true" ]]; then
+            profile="release-ninja-p4"
           else
             echo "::error::No profile produced a package."
             exit 1
@@ -926,14 +927,14 @@ jobs:
       - source
       - prepare_dependencies
       - release_ninja_lto
-      - release_ninja_p2
+      - release_ninja_p4
     if: >-
       ${{
         always() &&
         needs.source.result == 'success' &&
         needs.prepare_dependencies.result == 'success' &&
         needs.release_ninja_lto.outputs.built != 'true' &&
-        needs.release_ninja_p2.outputs.built != 'true'
+        needs.release_ninja_p4.outputs.built != 'true'
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -941,7 +942,7 @@ jobs:
     steps:
       - name: Report build failure
         run: |
-          echo "::error::Both the LTO profile and the no-LTO fallback failed."
+          echo "::error::No profile produced a package."
           exit 1
 
   final_result:
@@ -950,7 +951,7 @@ jobs:
       - source
       - prepare_dependencies
       - release_ninja_lto
-      - release_ninja_p2
+      - release_ninja_p4
       - publish_release
       - no_profile_succeeded
     if: ${{ always() }}
@@ -964,13 +965,13 @@ jobs:
           SOURCE_RESULT: ${{ needs.source.result }}
           DEPENDENCIES_RESULT: ${{ needs.prepare_dependencies.result }}
           LTO_BUILT: ${{ needs.release_ninja_lto.outputs.built }}
-          FALLBACK_BUILT: ${{ needs.release_ninja_p2.outputs.built }}
+          STANDARD_BUILT: ${{ needs.release_ninja_p4.outputs.built }}
           PUBLISH_RESULT: ${{ needs.publish_release.result }}
         run: |
           set -euo pipefail
 
           built_package=false
-          if [[ "$LTO_BUILT" == "true" || "$FALLBACK_BUILT" == "true" ]]; then
+          if [[ "$LTO_BUILT" == "true" || "$STANDARD_BUILT" == "true" ]]; then
             built_package=true
           fi
 
@@ -983,13 +984,13 @@ jobs:
               "source=$SOURCE_RESULT" \
               "dependencies=$DEPENDENCIES_RESULT" \
               "lto_built=$LTO_BUILT" \
-              "fallback_built=$FALLBACK_BUILT" \
+              "standard_built=$STANDARD_BUILT" \
               "publish=$PUBLISH_RESULT"
             exit 1
           fi
 
           if [[ "$LTO_BUILT" == "true" ]]; then
-            echo "Published the interprocedurally optimized package."
+            echo "Published the experimental interprocedurally optimized package."
           else
-            echo "::warning::The LTO profile failed; published the no-LTO fallback."
+            echo "Published the standard package."
           fi

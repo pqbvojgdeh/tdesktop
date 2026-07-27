@@ -1,3 +1,9 @@
+# Mirroring official dev also mirrors its .github/workflows, so the upstream
+# Docker, Linux, MacOS, MacOS Packaged, Snap, Windows and WinGet workflows
+# would run in this fork on every sync. They are disabled by hand in the
+# repository Actions settings: they build platforms this fork does not ship,
+# several of them fail anyway, and their caches took 5 of the 10 GiB cache
+# budget, which made sccache writes fail. Keep them disabled.
 name: Sync official upstream dev
 
 on:

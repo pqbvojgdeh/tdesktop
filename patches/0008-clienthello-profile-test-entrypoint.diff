@@ -1,17 +1,22 @@
 diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
-index b695d6b..3a52cc9 100644
+index b695d6b..8592879 100644
 --- a/Telegram/CMakeLists.txt
 +++ b/Telegram/CMakeLists.txt
-@@ -90,6 +90,15 @@ PRIVATE
+@@ -90,6 +90,20 @@ PRIVATE
      desktop-app::external_xxhash
  )
  
 +if (DESKTOP_APP_MTPROTO_PROFILE_TESTS)
-+    target_compile_definitions(Telegram PRIVATE
-+        DESKTOP_APP_MTPROTO_PROFILE_TESTS
-+    )
++    # The definition goes to td_mtproto only, where the validator itself is
++    # compiled. Telegram receives the entry point as one extra source file
++    # instead of a target-wide definition, so turning the option off for the
++    # packaged binary changes the source list rather than the compile flags:
++    # the relink then recompiles a few dozen files instead of the whole app.
 +    target_compile_definitions(td_mtproto PRIVATE
 +        DESKTOP_APP_MTPROTO_PROFILE_TESTS
++    )
++    target_sources(Telegram PRIVATE
++        ${src_loc}/mtproto_profile_test_entry.cpp
 +    )
 +endif()
 +
@@ -19,29 +24,75 @@ index b695d6b..3a52cc9 100644
      telegram_add_apple_swift_runtime(Telegram)
  endif()
 diff --git a/Telegram/SourceFiles/main.cpp b/Telegram/SourceFiles/main.cpp
-index d3d938c..d50118c 100644
+index d3d938c..5980227 100644
 --- a/Telegram/SourceFiles/main.cpp
 +++ b/Telegram/SourceFiles/main.cpp
-@@ -7,7 +7,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -7,7 +7,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  */
  #include "core/launcher.h"
  
-+#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
++namespace Core {
++
++// Installed by mtproto_profile_test_entry.cpp, which is added to the target
++// only in a DESKTOP_APP_MTPROTO_PROFILE_TESTS build. It stays null in the
++// shipping build, where that translation unit is not compiled at all, so the
++// two configurations differ by one source file instead of by a preprocessor
++// definition on the whole target. Constant initialization runs before any
++// dynamic initializer, so the installer in the other unit cannot race it.
++int (*OptionalTestEntryPoint)(int argc, char *argv[]) = nullptr;
++
++} // namespace Core
++
+ int main(int argc, char *argv[]) {
++	if (Core::OptionalTestEntryPoint) {
++		// A negative result means these are not the test arguments.
++		const auto code = Core::OptionalTestEntryPoint(argc, argv);
++		if (code >= 0) {
++			return code;
++		}
++	}
+ 	const auto launcher = Core::Launcher::Create(argc, argv);
+ 	return launcher ? launcher->exec() : 1;
+ }
+diff --git a/Telegram/SourceFiles/mtproto_profile_test_entry.cpp b/Telegram/SourceFiles/mtproto_profile_test_entry.cpp
+new file mode 100644
+index 0000000..97983af
+--- /dev/null
++++ b/Telegram/SourceFiles/mtproto_profile_test_entry.cpp
+@@ -0,0 +1,36 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
 +#include "mtproto/details/mtproto_tls_socket.h"
 +
 +#include <QtCore/QCoreApplication>
 +
 +#include <cstring>
-+#endif
 +
- int main(int argc, char *argv[]) {
-+#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS
-+	if (argc == 2
-+		&& !std::strcmp(argv[1], "--validate-mtproto-client-hello")) {
-+		const auto application = QCoreApplication(argc, argv);
-+		return MTP::details::ValidateClientHelloProfilesForTests() ? 0 : 1;
++namespace Core {
++extern int (*OptionalTestEntryPoint)(int argc, char *argv[]);
++} // namespace Core
++
++namespace {
++
++// Returns a negative value when these are not the test arguments, which tells
++// main() to start the application normally.
++[[nodiscard]] int RunClientHelloProfileTests(int argc, char *argv[]) {
++	if (argc != 2
++		|| std::strcmp(argv[1], "--validate-mtproto-client-hello")) {
++		return -1;
 +	}
-+#endif
- 	const auto launcher = Core::Launcher::Create(argc, argv);
- 	return launcher ? launcher->exec() : 1;
- }
++	const auto application = QCoreApplication(argc, argv);
++	return MTP::details::ValidateClientHelloProfilesForTests() ? 0 : 1;
++}
++
++[[maybe_unused]] const auto kEntryPointInstalled = [] {
++	Core::OptionalTestEntryPoint = RunClientHelloProfileTests;
++	return true;
++}();
++
++} // namespace

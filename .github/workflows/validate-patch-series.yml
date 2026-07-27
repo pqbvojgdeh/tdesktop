@@ -159,6 +159,7 @@ jobs:
           proxy_ui="source/Telegram/SourceFiles/boxes/connection_box.cpp"
           main_menu="source/Telegram/SourceFiles/window/window_main_menu.cpp"
           menu_helpers="source/Telegram/SourceFiles/window/window_main_menu_helpers.cpp"
+          entry_point="source/Telegram/SourceFiles/mtproto_profile_test_entry.cpp"
           tests="patch-source/patches/tests"
 
           # --- Regression guards --------------------------------------------
@@ -221,6 +222,12 @@ jobs:
             echo "::error::MTProto test relink reintroduces a non-canonical source path."
             exit 1
           fi
+          # A target-wide definition on Telegram is what made turning the test
+          # option off recompile every translation unit instead of relinking.
+          if grep -Fq 'target_compile_definitions(Telegram PRIVATE' "$cmake_root"; then
+            echo "::error::The profile test definition is attached to the whole Telegram target again."
+            exit 1
+          fi
 
           # --- Cross-file and build invariants -------------------------------
           # These span several files or exist only for the build, so no single
@@ -229,7 +236,12 @@ jobs:
           grep -Fq '#include <QtNetwork/QTcpSocket>' "$tls_header"
           grep -Fq 'target_compile_definitions(td_mtproto PRIVATE' "$cmake_root"
           grep -Fq '#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS' "$tls"
-          grep -Fq '#ifdef DESKTOP_APP_MTPROTO_PROFILE_TESTS' "$tls_header"
+          # The declaration has to stay outside the guard: the optional entry
+          # point is compiled without the definition and still calls it.
+          grep -Fq 'ValidateClientHelloProfilesForTests();' "$tls_header"
+          grep -Fq 'target_sources(Telegram PRIVATE' "$cmake_root"
+          test -f "$entry_point"
+          grep -Fq 'OptionalTestEntryPoint' "source/Telegram/SourceFiles/main.cpp"
           grep -Fq 'cmake -D DESKTOP_APP_MTPROTO_PROFILE_TESTS=OFF ..\out' "$build_profile"
           grep -Fq 'kProxySettingsMaximumClientHelloType' "$settings_proxy"
 
