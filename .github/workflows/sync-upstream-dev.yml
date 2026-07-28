@@ -43,7 +43,9 @@ jobs:
       - name: Checkout automation branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: mtproto-patches
+          # The scheduled run happens on the default branch, so this follows a
+          # branch rename instead of pinning a name that can go stale.
+          ref: ${{ github.ref_name }}
           fetch-depth: 1
           token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           persist-credentials: true
@@ -129,7 +131,7 @@ jobs:
             gh workflow run \
               build-patched-upstream-dev-windows.yml \
               --repo "$GITHUB_REPOSITORY" \
-              --ref mtproto-patches \
+              --ref "$GITHUB_REF_NAME" \
               -f "variant=$variant"
 
             echo "$variant Windows build dispatched for ${{ steps.sync.outputs.official_sha }}."
