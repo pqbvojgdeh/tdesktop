@@ -1,15 +1,12 @@
 name: Validate MTProto patch series
 
+# This branch is superseded by build-optimization, which is the default
+# branch and carries the working build configuration. Every automatic
+# trigger is removed here so that nothing runs from the stale configuration:
+# the schedule would only fire while this branch is the default one, but the
+# push trigger would fire on any push, and both are pointless now.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - mtproto-patches
-    paths:
-      - patches/**
-      - .github/workflows/**
-  schedule:
-    - cron: "17 3 * * *"
 
 permissions:
   contents: read
