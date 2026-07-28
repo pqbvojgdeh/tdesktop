@@ -80,6 +80,11 @@ jobs:
       BUILD_PARALLEL: ${{ inputs.parallel }}
       REQUIRE_VS2026: ${{ inputs.require_vs2026 }}
       SCCACHE_GHA_ENABLED: "true"
+      # The link takes about fourteen minutes with no compiler calls, which is
+      # longer than the ten minute default idle timeout: the server exited
+      # mid-build and the statistics reported afterwards covered only the
+      # relink that followed it.
+      SCCACHE_IDLE_TIMEOUT: "0"
 
     defaults:
       run:
