@@ -1,5 +1,5 @@
 diff --git a/Telegram/Resources/langs/lang.strings b/Telegram/Resources/langs/lang.strings
-index cfc40d8..119d8bb 100644
+index 00c843e..5d8ee98 100644
 --- a/Telegram/Resources/langs/lang.strings
 +++ b/Telegram/Resources/langs/lang.strings
 @@ -1299,6 +1299,56 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -59,34 +59,8 @@ index cfc40d8..119d8bb 100644
  "lng_badge_psa_default" = "PSA";
  "lng_about_psa_default" = "This message provides you with a public service announcement. To remove it from your chat list, right click it and select **Hide**.";
  "lng_tooltip_psa_default" = "This message provides you with a public service announcement.";
-diff --git a/Telegram/SourceFiles/boxes/boxes.style b/Telegram/SourceFiles/boxes/boxes.style
-index 3e51338..a3f1c5f 100644
---- a/Telegram/SourceFiles/boxes/boxes.style
-+++ b/Telegram/SourceFiles/boxes/boxes.style
-@@ -697,10 +697,21 @@ groupStickersField: InputField(defaultMultiSelectSearchField) {
- groupStickersSubTitleHeight: 48px;
- 
- proxyUsePadding: margins(22px, 6px, 22px, 5px);
-+proxySettingsWidth: 540px;
-+proxySettingsControlLabelWidth: 160px;
-+proxySettingsNumberWidth: 90px;
-+proxySettingsUnitWidth: 24px;
-+proxySettingsNumberInput: InputField(connectionPortInputField) {
-+	textMargins: margins(0px, 17px, 0px, 4px);
-+}
- proxyTryIPv6Padding: margins(22px, 8px, 22px, 5px);
- proxyRowPadding: margins(22px, 8px, 8px, 8px);
-+proxyRowSelectedPadding: margins(6px, 2px, 6px, 2px);
-+proxyRowSelectedRadius: 8px;
-+proxyRowSelectedBg: windowBgOver;
- proxyRowIconSkip: 32px;
- proxyRowSkip: 2px;
-+proxyRowStatusSkip: 8px;
- proxyRowRipple: defaultRippleAnimationBgOver;
- proxyRowTitleFg: windowFg;
- proxyRowTitlePalette: TextPalette(defaultTextPalette) {
 diff --git a/Telegram/SourceFiles/boxes/connection_box.cpp b/Telegram/SourceFiles/boxes/connection_box.cpp
-index 6d99e31..487c899 100644
+index 273a032..63b67e8 100644
 --- a/Telegram/SourceFiles/boxes/connection_box.cpp
 +++ b/Telegram/SourceFiles/boxes/connection_box.cpp
 @@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -97,7 +71,7 @@ index 6d99e31..487c899 100644
  #include "base/weak_ptr.h"
  #include "core/application.h"
  #include "core/core_settings.h"
-@@ -59,30 +60,118 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -60,30 +61,118 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  #include "styles/style_menu_icons.h"
  #include "styles/style_settings.h"
  
@@ -225,7 +199,7 @@ index 6d99e31..487c899 100644
  [[nodiscard]] std::vector<QString> ExtractLinkCandidates(const QString &input) {
  	auto urls = std::vector<QString>();
  	static const auto urlRegex = QRegularExpression(
-@@ -560,6 +649,7 @@ public:
+@@ -561,6 +650,7 @@ public:
  	ProxyRow(QWidget *parent, View &&view);
  
  	void updateFields(View &&view);
@@ -233,7 +207,7 @@ index 6d99e31..487c899 100644
  
  	rpl::producer<> deleteClicks() const;
  	rpl::producer<> restoreClicks() const;
-@@ -582,6 +672,7 @@ private:
+@@ -583,6 +673,7 @@ private:
  	View _view;
  
  	Ui::Text::String _title;
@@ -241,7 +215,7 @@ index 6d99e31..487c899 100644
  	object_ptr<Ui::IconButton> _menuToggle;
  	rpl::event_stream<> _deleteClicks;
  	rpl::event_stream<> _restoreClicks;
-@@ -591,6 +682,7 @@ private:
+@@ -592,6 +683,7 @@ private:
  	base::unique_qptr<Ui::DropdownMenu> _menu;
  
  	bool _set = false;
@@ -249,7 +223,7 @@ index 6d99e31..487c899 100644
  	Ui::Animations::Simple _toggled;
  	Ui::Animations::Simple _setAnimation;
  	std::unique_ptr<Ui::InfiniteRadialAnimation> _progress;
-@@ -626,16 +718,37 @@ private:
+@@ -627,16 +719,37 @@ private:
  	int rowHeight() const;
  	void refreshProxyForCalls();
  	void refreshProxyRotation();
@@ -292,7 +266,7 @@ index 6d99e31..487c899 100644
  	base::unique_qptr<Ui::RpWidget> _noRows;
  	object_ptr<Ui::VerticalLayout> _initialWrap;
  	QPointer<Ui::VerticalLayout> _wrap;
-@@ -746,13 +859,12 @@ void ProxyRow::updateFields(View &&view) {
+@@ -747,13 +860,12 @@ void ProxyRow::updateFields(View &&view) {
  			st::defaultRadio.duration);
  	}
  	_view = std::move(view);
@@ -310,7 +284,7 @@ index 6d99e31..487c899 100644
  		Ui::ItemTextDefaultOptions());
  
  	const auto state = _view.state;
-@@ -786,7 +898,7 @@ void ProxyRow::updateFields(View &&view) {
+@@ -787,7 +899,7 @@ void ProxyRow::updateFields(View &&view) {
  			st::defaultRadio.duration);
  	}
  
@@ -319,7 +293,7 @@ index 6d99e31..487c899 100644
  
  	update();
  }
-@@ -797,11 +909,19 @@ void ProxyRow::radialAnimationCallback() {
+@@ -798,11 +910,19 @@ void ProxyRow::radialAnimationCallback() {
  	}
  }
  
@@ -339,7 +313,7 @@ index 6d99e31..487c899 100644
  		+ st::proxyRowPadding.bottom();
  	auto right = st::proxyRowPadding.right();
  	_menuToggle->moveToRight(
-@@ -817,6 +937,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
+@@ -818,6 +938,14 @@ int ProxyRow::resizeGetHeight(int newWidth) {
  
  void ProxyRow::paintEvent(QPaintEvent *e) {
  	Painter p(this);
@@ -354,7 +328,7 @@ index 6d99e31..487c899 100644
  
  	if (!_view.deleted) {
  		paintRipple(p, 0, 0);
-@@ -830,7 +958,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+@@ -831,7 +959,12 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
  		p.setOpacity(st::stickersRowDisabledOpacity);
  	}
  
@@ -367,7 +341,7 @@ index 6d99e31..487c899 100644
  
  	p.setPen(st::proxyRowTitleFg);
  	p.setFont(st::semiboldFont);
-@@ -850,41 +983,89 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
+@@ -851,41 +984,89 @@ void ProxyRow::paintEvent(QPaintEvent *e) {
  			return st::proxyRowStatusFg;
  		}
  	}();
@@ -468,7 +442,7 @@ index 6d99e31..487c899 100644
  	top += st::normalFont->height + st::proxyRowPadding.bottom();
  }
  
-@@ -1020,6 +1201,11 @@ ProxiesBox::ProxiesBox(
+@@ -1021,6 +1202,11 @@ ProxiesBox::ProxiesBox(
  	const QString &highlightId)
  : _controller(controller)
  , _settings(settings)
@@ -480,7 +454,7 @@ index 6d99e31..487c899 100644
  , _initialWrap(this)
  , _highlightId(highlightId) {
  	_controller->views(
-@@ -1077,6 +1263,16 @@ void ProxiesBox::setupTopButton() {
+@@ -1078,6 +1264,16 @@ void ProxiesBox::setupTopButton() {
  			st::popupMenuWithIcons);
  		const auto raw = menu->get();
  		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
@@ -497,7 +471,7 @@ index 6d99e31..487c899 100644
  		addAction({
  			.text = tr::lng_proxy_add_from_clipboard(tr::now),
  			.handler = [=] { AddProxyFromClipboard(_controller, uiShow()); },
-@@ -1106,13 +1302,16 @@ void ProxiesBox::setupTopButton() {
+@@ -1107,13 +1303,16 @@ void ProxiesBox::setupTopButton() {
  
  void ProxiesBox::setupContent() {
  	const auto inner = setInnerWidget(object_ptr<Ui::VerticalLayout>(this));
@@ -520,7 +494,7 @@ index 6d99e31..487c899 100644
  	_proxySettings
  		= std::make_shared<Ui::RadioenumGroup<ProxyData::Settings>>(
  			_settings.settings());
-@@ -1137,74 +1336,235 @@ void ProxiesBox::setupContent() {
+@@ -1138,74 +1337,235 @@ void ProxiesBox::setupContent() {
  			ProxyData::Settings::Enabled,
  			tr::lng_proxy_use_custom(tr::now)),
  		st::proxyUsePadding);
@@ -808,7 +782,7 @@ index 6d99e31..487c899 100644
  
  	_wrap = inner->add(std::move(_initialWrap));
  	inner->add(object_ptr<Ui::FixedHeightWidget>(
-@@ -1218,41 +1578,108 @@ void ProxiesBox::setupContent() {
+@@ -1219,41 +1579,108 @@ void ProxiesBox::setupContent() {
  		}
  		refreshProxyForCalls();
  		refreshProxyRotation();
@@ -928,7 +902,7 @@ index 6d99e31..487c899 100644
  	_proxyRotationOptions->finishAnimating();
  
  	{
-@@ -1273,7 +1700,7 @@ void ProxiesBox::setupContent() {
+@@ -1274,7 +1701,7 @@ void ProxiesBox::setupContent() {
  		wrap->finishAnimating();
  	}
  
@@ -937,7 +911,7 @@ index 6d99e31..487c899 100644
  
  	inner->heightValue(
  	) | rpl::map([=](int height) {
-@@ -1284,7 +1711,7 @@ void ProxiesBox::setupContent() {
+@@ -1285,7 +1712,7 @@ void ProxiesBox::setupContent() {
  			st::boxMaxListHeight);
  	}) | rpl::distinct_until_changed(
  	) | rpl::on_next([=](int height) {
@@ -946,7 +920,7 @@ index 6d99e31..487c899 100644
  	}, inner->lifetime());
  }
  
-@@ -1293,8 +1720,7 @@ void ProxiesBox::refreshProxyForCalls() {
+@@ -1294,8 +1721,7 @@ void ProxiesBox::refreshProxyForCalls() {
  		return;
  	}
  	_proxyForCalls->toggle(
@@ -956,7 +930,7 @@ index 6d99e31..487c899 100644
  		anim::type::normal);
  }
  
-@@ -1302,21 +1728,106 @@ void ProxiesBox::refreshProxyRotation() {
+@@ -1303,21 +1729,106 @@ void ProxiesBox::refreshProxyRotation() {
  	if (!_proxyRotation || !_proxyRotationOptions) {
  		return;
  	}
@@ -1067,7 +1041,7 @@ index 6d99e31..487c899 100644
  		+ st::proxyRowPadding.bottom();
  }
  
-@@ -1339,8 +1850,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1340,8 +1851,7 @@ void ProxiesBox::applyView(View &&view) {
  			? _wrap.data()
  			: _initialWrap.data();
  		const auto &[i, ok] = _rows.emplace(id, nullptr);
@@ -1077,7 +1051,7 @@ index 6d99e31..487c899 100644
  			object_ptr<ProxyRow>(
  				wrap,
  				std::move(view))));
-@@ -1355,6 +1865,7 @@ void ProxiesBox::applyView(View &&view) {
+@@ -1356,6 +1866,7 @@ void ProxiesBox::applyView(View &&view) {
  		i->second->updateFields(std::move(view));
  	}
  	refreshProxyRotation();
@@ -1085,7 +1059,7 @@ index 6d99e31..487c899 100644
  }
  
  void ProxiesBox::createNoRowsLabel() {
-@@ -1364,7 +1875,7 @@ void ProxiesBox::createNoRowsLabel() {
+@@ -1365,7 +1876,7 @@ void ProxiesBox::createNoRowsLabel() {
  			rowHeight()),
  		st::proxyEmptyListPadding));
  	_noRows->resize(
@@ -1094,7 +1068,7 @@ index 6d99e31..487c899 100644
  			- st::proxyEmptyListPadding.left()
  			- st::proxyEmptyListPadding.right()),
  		_noRows->height());
-@@ -1704,19 +2215,14 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
+@@ -1705,19 +2216,14 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
  	) | ranges::views::transform([&](const ProxyData &proxy) {
  		return Item{ ++_idCounter, proxy };
  	}) | ranges::to_vector;
@@ -1116,7 +1090,7 @@ index 6d99e31..487c899 100644
  }
  
  void ProxiesBoxController::ShowApplyConfirmation(
-@@ -2003,49 +2509,198 @@ auto ProxiesBoxController::proxySettingsValue() const
+@@ -2004,49 +2510,198 @@ auto ProxiesBoxController::proxySettingsValue() const
  	) | rpl::distinct_until_changed();
  }
  
@@ -1348,7 +1322,7 @@ index 6d99e31..487c899 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
-@@ -2125,17 +2780,19 @@ void ProxiesBoxController::shareItems() {
+@@ -2126,17 +2781,19 @@ void ProxiesBoxController::shareItems() {
  
  void ProxiesBoxController::applyItem(int id) {
  	auto item = findById(id);
@@ -1375,7 +1349,7 @@ index 6d99e31..487c899 100644
  	saveDelayed();
  
  	if (j != end(_list)) {
-@@ -2146,6 +2803,7 @@ void ProxiesBoxController::applyItem(int id) {
+@@ -2147,6 +2804,7 @@ void ProxiesBoxController::applyItem(int id) {
  
  void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	auto item = findById(id);
@@ -1383,7 +1357,7 @@ index 6d99e31..487c899 100644
  	item->deleted = deleted;
  
  	if (deleted) {
-@@ -2195,6 +2853,9 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
+@@ -2196,6 +2854,9 @@ void ProxiesBoxController::setDeleted(int id, bool deleted) {
  	}
  	saveDelayed();
  	updateView(*item);
@@ -1393,7 +1367,7 @@ index 6d99e31..487c899 100644
  }
  
  object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
-@@ -2217,17 +2878,23 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
+@@ -2218,17 +2879,23 @@ object_ptr<Ui::BoxContent> ProxiesBoxController::editItemBox(int id) {
  void ProxiesBoxController::replaceItemWith(
  		std::vector<Item>::iterator which,
  		std::vector<Item>::iterator with) {
@@ -1420,7 +1394,7 @@ index 6d99e31..487c899 100644
  }
  
  void ProxiesBoxController::replaceItemValue(
-@@ -2297,6 +2964,64 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
+@@ -2298,6 +2965,64 @@ bool ProxiesBoxController::setProxySettings(ProxyData::Settings value) {
  		}
  	}
  	Core::App().setCurrentProxy(_settings.selected(), value);
@@ -1485,7 +1459,7 @@ index 6d99e31..487c899 100644
  	saveDelayed();
  	return true;
  }
-@@ -2329,15 +3054,46 @@ void ProxiesBoxController::setProxyRotationTimeout(int value) {
+@@ -2330,15 +3055,46 @@ void ProxiesBoxController::setProxyRotationTimeout(int value) {
  }
  
  void ProxiesBoxController::setTryIPv6(bool enabled) {
@@ -1535,7 +1509,7 @@ index 6d99e31..487c899 100644
  void ProxiesBoxController::saveDelayed() {
  	Core::App().proxyRotationSettingsChanged();
  	_saveTimer.callOnce(kSaveSettingsDelayedTimeout);
-@@ -2359,18 +3115,57 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
+@@ -2360,18 +3116,57 @@ rpl::producer<bool> ProxiesBoxController::listShareableChanges() const {
  }
  
  void ProxiesBoxController::updateView(const Item &item) {
@@ -1596,7 +1570,7 @@ index 6d99e31..487c899 100644
  			return item.state;
  		} else if (_account->mtp().dcstate() == MTP::ConnectedState) {
  			return ItemState::Online;
-@@ -2379,18 +3174,19 @@ void ProxiesBoxController::updateView(const Item &item) {
+@@ -2380,18 +3175,19 @@ void ProxiesBoxController::updateView(const Item &item) {
  	}();
  	const auto supportsShare = ProxyDataIsShareable(item.data);
  	const auto supportsCalls = item.data.supportsCalls();
@@ -1739,3 +1713,29 @@ index 5de98bc..243f380 100644
  	std::shared_ptr<Ui::Show> _show;
  
  	ProxyData _lastSelectedProxy;
+diff --git a/Telegram/SourceFiles/boxes/connection_box.style b/Telegram/SourceFiles/boxes/connection_box.style
+index a73a150..5cbb024 100644
+--- a/Telegram/SourceFiles/boxes/connection_box.style
++++ b/Telegram/SourceFiles/boxes/connection_box.style
+@@ -18,10 +18,21 @@ connectionUserInputField: InputField(defaultInputField) {
+ connectionPasswordInputField: InputField(defaultInputField) {
+ }
+ proxyUsePadding: margins(22px, 6px, 22px, 5px);
++proxySettingsWidth: 540px;
++proxySettingsControlLabelWidth: 160px;
++proxySettingsNumberWidth: 90px;
++proxySettingsUnitWidth: 24px;
++proxySettingsNumberInput: InputField(connectionPortInputField) {
++	textMargins: margins(0px, 17px, 0px, 4px);
++}
+ proxyTryIPv6Padding: margins(22px, 8px, 22px, 5px);
+ proxyRowPadding: margins(22px, 8px, 8px, 8px);
++proxyRowSelectedPadding: margins(6px, 2px, 6px, 2px);
++proxyRowSelectedRadius: 8px;
++proxyRowSelectedBg: windowBgOver;
+ proxyRowIconSkip: 32px;
+ proxyRowSkip: 2px;
++proxyRowStatusSkip: 8px;
+ proxyRowRipple: defaultRippleAnimationBgOver;
+ proxyRowTitleFg: windowFg;
+ proxyRowTitlePalette: TextPalette(defaultTextPalette) {

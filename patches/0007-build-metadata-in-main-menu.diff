@@ -1,36 +1,8 @@
-diff --git a/Telegram/SourceFiles/window/window.style b/Telegram/SourceFiles/window/window.style
-index 688c18c..ccd05e8 100644
---- a/Telegram/SourceFiles/window/window.style
-+++ b/Telegram/SourceFiles/window/window.style
-@@ -112,7 +112,7 @@ mainMenuCoverNameTop: 84px;
- mainMenuCoverStatusLeft: mainMenuCoverNameLeft;
- mainMenuCoverStatusTop: 103px;
- mainMenuSkip: 6px;
--mainMenuFooterHeightMin: 80px;
-+mainMenuFooterHeightMin: 101px;
- mainMenu: Menu(defaultMenu) {
- 	itemFg: windowBoldFg;
- 	itemFgOver: windowBoldFgOver;
-@@ -153,11 +153,12 @@ mainMenuTelegramLabel: FlatLabel(defaultFlatLabel) {
- 		linkFg: windowSubTextFg;
- 	}
- }
--mainMenuTelegramBottom: 38px;
-+mainMenuTelegramBottom: 59px;
- mainMenuVersionLabel: FlatLabel(mainMenuTelegramLabel) {
- 	style: defaultTextStyle;
- }
--mainMenuVersionBottom: 17px;
-+mainMenuVersionBottom: 38px;
-+mainMenuAboutBottom: 17px;
- 
- mainMenuToggleSize: 6px;
- mainMenuToggleFourStrokes: 3px;
 diff --git a/Telegram/SourceFiles/window/window_main_menu.cpp b/Telegram/SourceFiles/window/window_main_menu.cpp
-index f6f0985..c6d71e0 100644
+index 7ea8518..538ca8c 100644
 --- a/Telegram/SourceFiles/window/window_main_menu.cpp
 +++ b/Telegram/SourceFiles/window/window_main_menu.cpp
-@@ -341,7 +341,9 @@ MainMenu::MainMenu(
+@@ -340,7 +340,9 @@ MainMenu::MainMenu(
  , _footer(_inner->add(object_ptr<Ui::RpWidget>(_inner.get())))
  , _telegram(
  	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuTelegramLabel))
@@ -41,7 +13,7 @@ index f6f0985..c6d71e0 100644
  	setAttribute(Qt::WA_OpaquePaintEvent);
  
  	setupUserpicButton();
-@@ -372,6 +374,7 @@ MainMenu::MainMenu(
+@@ -371,6 +373,7 @@ MainMenu::MainMenu(
  	) | rpl::on_next([=] {
  		_telegram->moveToLeft(st::mainMenuFooterLeft, _footer->height() - st::mainMenuTelegramBottom - _telegram->height());
  		_version->moveToLeft(st::mainMenuFooterLeft, _footer->height() - st::mainMenuVersionBottom - _version->height());
@@ -49,7 +21,7 @@ index f6f0985..c6d71e0 100644
  	}, _footer->lifetime());
  
  	rpl::combine(
-@@ -387,22 +390,50 @@ MainMenu::MainMenu(
+@@ -386,22 +389,50 @@ MainMenu::MainMenu(
  		u"Telegram Desktop"_q,
  		u"https://desktop.telegram.org"_q));
  	_telegram->setLinksTrusted();
@@ -125,6 +97,30 @@ index 5975e0e..57f09d5 100644
  	QPointer<Ui::SettingsButton> _nightThemeToggle;
  	rpl::event_stream<bool> _nightThemeSwitches;
  	base::Timer _nightThemeSwitch;
+diff --git a/Telegram/SourceFiles/window/window_main_menu.style b/Telegram/SourceFiles/window/window_main_menu.style
+index 6188c09..1ad7c7d 100644
+--- a/Telegram/SourceFiles/window/window_main_menu.style
++++ b/Telegram/SourceFiles/window/window_main_menu.style
+@@ -31,7 +31,7 @@ mainMenuCoverNameTop: 84px;
+ mainMenuCoverStatusLeft: mainMenuCoverNameLeft;
+ mainMenuCoverStatusTop: 103px;
+ mainMenuSkip: 6px;
+-mainMenuFooterHeightMin: 80px;
++mainMenuFooterHeightMin: 101px;
+ mainMenu: Menu(defaultMenu) {
+ 	itemFg: windowBoldFg;
+ 	itemFgOver: windowBoldFgOver;
+@@ -47,7 +47,8 @@ mainMenu: Menu(defaultMenu) {
+ 	itemToggleShift: 11px;
+ }
+ mainMenuFooterLeft: 25px;
+-mainMenuTelegramBottom: 38px;
+-mainMenuVersionBottom: 17px;
++mainMenuTelegramBottom: 59px;
++mainMenuVersionBottom: 38px;
++mainMenuAboutBottom: 17px;
+ mainMenuToggleSize: 6px;
+ mainMenuTogglePosition: point(30px, 30px);
 diff --git a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp b/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
 index 69ef7df..14bc88a 100644
 --- a/Telegram/SourceFiles/window/window_main_menu_helpers.cpp
