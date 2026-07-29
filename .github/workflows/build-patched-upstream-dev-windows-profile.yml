@@ -790,6 +790,17 @@ jobs:
           rem and relinked before packaging.
           if /I "%BUILD_VARIANT%"=="patched" set "MTPROTO_TEST_FLAGS=-D DESKTOP_APP_MTPROTO_PROFILE_TESTS=ON"
 
+          rem Upstream vendored libcbor (Telegram/ThirdParty/libcbor, pulled in
+          rem by lib_fido2 for the new WebAuthn/FIDO2 feature) defines a
+          rem non-static cbor_encode_double, and Qt6Core statically embeds an
+          rem unrelated tinycbor-derived function with the identical exported
+          rem name. Both land in the same Telegram.exe link, so MSVC fails
+          rem with LNK2005 "already defined" / LNK1169. Renaming the symbol
+          rem only inside lib_fido2's own C translation units (its callers
+          rem never spell the name outside those files) resolves the
+          rem collision without touching Qt or any vendored source.
+          set "FIDO2_CBOR_SYMBOL_FIX=-D CMAKE_C_FLAGS=/Dcbor_encode_double=tdesktop_fido2_cbor_encode_double"
+
           rem Temporary CMake 4.4 compatibility; remove after upstream handles CMP0218.
           if /I "%BUILD_GENERATOR%"=="official" (
             set "CMAKE_GENERATOR=Visual Studio 18 2026"
@@ -802,6 +813,7 @@ jobs:
               -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
               -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
+              %FIDO2_CBOR_SYMBOL_FIX% ^
               -D CMAKE_C_COMPILER_LAUNCHER=sccache ^
               -D CMAKE_CXX_COMPILER_LAUNCHER=sccache ^
               -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
@@ -820,6 +832,7 @@ jobs:
               -D CMAKE_POLICY_DEFAULT_CMP0218=OLD ^
               -D CMAKE_CXX_FLAGS=/DAssertIsDebug=__noop ^
               -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Gy /Gw /DNDEBUG" ^
+              %FIDO2_CBOR_SYMBOL_FIX% ^
               -D CMAKE_JOB_POOLS=compile=%BUILD_PARALLEL%;link=1 ^
               -D CMAKE_JOB_POOL_COMPILE=compile ^
               -D CMAKE_JOB_POOL_LINK=link ^
