@@ -23,15 +23,37 @@ Update the profile label, encoded blocks and both fresh/resumed validator
 expectations together. Do not infer future browser bytes from draft standards
 or version numbers alone.
 
+## Chromium 151 evidence
+
+`tests/chromium151_capture_evidence.json` records two clean Chromium
+151.0.7922.71 processes on Windows 11 x64. Each process made one fresh and four
+forced-new-connection requests through a local SOCKS5 pass-through to
+`tls.peet.ws`; the proxy did not terminate TLS. The evidence includes exact
+ClientHello record and handshake lengths, SHA-256 hashes, every observed
+extension order, JA3, JA4 and PeetPrint hashes.
+
+The capture confirms signature algorithms `0x0904`, `0x0905` and `0x0906`, SCT
+`0x0012`, session_ticket `0x0023`, X25519MLKEM768/X25519 key shares and a
+113-byte resumed PSK identity with a 32-byte binder. Chromium 151 has the same
+stable wire structure as the previous 150 profile, so the encoded blocks did
+not need a byte-level change. The profile and identifiers were renamed to 151.
+
+Run `node patches/tests/chromium151_capture_test.cjs --verify` for the offline
+evidence regression. To recapture, make Playwright available to Node and run:
+
+```text
+node patches/tests/chromium151_capture_test.cjs --capture <chrome.exe> <output.json>
+```
+
+The test launches two clean browser processes and fails on a drift in ciphers,
+extensions, groups, key shares, signature algorithms, ALPN, GREASE/PSK
+placement, ticket/binder lengths, JA4 or PeetPrint.
+
 ## Current open evidence gaps
 
-- Chromium 150 signature algorithms `0x0904`, `0x0905` and `0x0906` still need
-  confirmation from a real Chrome 150 capture. The same capture must confirm
-  extensions `0x0012` (SCT) and `0x0023` (session_ticket).
-- Chromium synthetic resumption uses a fixed 113-byte identity and does not
-  possess a ticket issued by the observed server. A stateful observer can
-  distinguish this from real TLS resumption. Do not randomize the identity
-  length without server-specific capture evidence.
+- Chromium synthetic resumption matches the captured ticket and binder lengths,
+  but does not possess a server-issued ticket. A stateful observer can still
+  distinguish it from real TLS resumption.
 - YandexGost is intentionally emitted as a fresh ClientHello. Its previous
   unconditional PSK made even the first connection look resumed.
 
