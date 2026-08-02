@@ -55,7 +55,7 @@ function isGrease(name) {
 function extensionId(extension) {
   if (isGrease(extension.name)) return 'GREASE';
   const match = extension.name.match(/\((\d+)\)$/);
-  assert(match, `extension has no numeric id: ${extension.name}`);
+  assert.ok(match, `extension has no numeric id: ${extension.name}`);
   return Number(match[1]);
 }
 
@@ -64,12 +64,12 @@ function findExtension(tls, prefix) {
 }
 
 function readU16(buffer, offset) {
-  assert(offset + 2 <= buffer.length, 'truncated uint16');
+  assert.ok(offset + 2 <= buffer.length, 'truncated uint16');
   return buffer.readUInt16BE(offset);
 }
 
 function readU24(buffer, offset) {
-  assert(offset + 3 <= buffer.length, 'truncated uint24');
+  assert.ok(offset + 3 <= buffer.length, 'truncated uint24');
   return (buffer[offset] << 16) | (buffer[offset + 1] << 8) | buffer[offset + 2];
 }
 
@@ -79,13 +79,13 @@ function validatePsk(extension) {
   const identitiesLength = readU16(data, offset);
   offset += 2;
   const identitiesEnd = offset + identitiesLength;
-  assert(identitiesEnd + 2 <= data.length, 'truncated PSK identities');
+  assert.ok(identitiesEnd + 2 <= data.length, 'truncated PSK identities');
   let identityCount = 0;
   let identityLength = 0;
   while (offset < identitiesEnd) {
     identityLength = readU16(data, offset);
     offset += 2;
-    assert(identityLength > 0 && offset + identityLength + 4 <= identitiesEnd);
+    assert.ok(identityLength > 0 && offset + identityLength + 4 <= identitiesEnd);
     offset += identityLength + 4;
     ++identityCount;
   }
@@ -97,7 +97,7 @@ function validatePsk(extension) {
   let binderLength = 0;
   while (offset < bindersEnd) {
     binderLength = data[offset++];
-    assert(binderLength > 0 && offset + binderLength <= bindersEnd);
+    assert.ok(binderLength > 0 && offset + binderLength <= bindersEnd);
     offset += binderLength;
     ++binderCount;
   }
@@ -111,7 +111,7 @@ function validatePsk(extension) {
 function validateTls(tls, resumed) {
   assert.equal(tls.tls_version_record, '771');
   assert.equal(tls.tls_version_negotiated, '772');
-  assert(isGrease(tls.ciphers[0]), 'first cipher must be GREASE');
+  assert.ok(isGrease(tls.ciphers[0]), 'first cipher must be GREASE');
   assert.deepEqual(tls.ciphers.slice(1), expected.ciphers);
 
   const ids = tls.extensions.map(extensionId);
@@ -120,7 +120,7 @@ function validateTls(tls, resumed) {
   if (resumed) {
     assert.equal(ids.at(-1), 41, 'pre_shared_key must be last');
   } else {
-    assert(!ids.includes(41), 'fresh ClientHello must not contain a PSK');
+    assert.ok(!ids.includes(41), 'fresh ClientHello must not contain a PSK');
   }
   const stableIds = ids.filter((id) => id !== 'GREASE' && id !== 41).sort((a, b) => a - b);
   assert.deepEqual(stableIds, expected.extensionIds);
@@ -128,10 +128,10 @@ function validateTls(tls, resumed) {
   const signatures = findExtension(tls, 'signature_algorithms ');
   assert.deepEqual(signatures.signature_algorithms, expected.signatureAlgorithms);
   const groups = findExtension(tls, 'supported_groups ');
-  assert(isGrease(groups.supported_groups[0]));
+  assert.ok(isGrease(groups.supported_groups[0]));
   assert.deepEqual(groups.supported_groups.slice(1), expected.groups);
   const versions = findExtension(tls, 'supported_versions ');
-  assert(isGrease(versions.versions[0]));
+  assert.ok(isGrease(versions.versions[0]));
   assert.deepEqual(versions.versions.slice(1), ['TLS 1.3', 'TLS 1.2']);
   assert.deepEqual(
     findExtension(tls, 'application_layer_protocol_negotiation ').protocols,
@@ -141,7 +141,7 @@ function validateTls(tls, resumed) {
 
   const keyShare = findExtension(tls, 'key_share ');
   const shares = keyShare.shared_keys.map((entry) => Object.entries(entry)[0]);
-  assert(isGrease(shares[0][0]));
+  assert.ok(isGrease(shares[0][0]));
   assert.equal(shares[0][1].length, 2);
   assert.equal(shares[1][0], 'X25519MLKEM768 (4588)');
   assert.equal(shares[1][1].length, 1216 * 2);
@@ -220,8 +220,8 @@ function verifyEvidence(evidence) {
   assert.equal(evidence.browser_version.split('.')[0], expected.browserMajor);
   assert.equal(evidence.target, target);
   assert.equal(evidence.capture_transport, 'local SOCKS5 pass-through to tls.peet.ws:443; no TLS termination');
-  assert(!Number.isNaN(Date.parse(evidence.captured_at)));
-  assert(evidence.source_capture_sha256.length >= 2);
+  assert.ok(!Number.isNaN(Date.parse(evidence.captured_at)));
+  assert.ok(evidence.source_capture_sha256.length >= 2);
   for (const hash of evidence.source_capture_sha256) {
     assert.match(hash, /^[0-9a-f]{64}$/);
   }
@@ -238,8 +238,8 @@ function verifyEvidence(evidence) {
 
   const fresh = evidence.captures.filter(({ resumed }) => !resumed);
   const repeated = evidence.captures.filter(({ resumed }) => resumed);
-  assert(fresh.length >= 2);
-  assert(repeated.length >= 8);
+  assert.ok(fresh.length >= 2);
+  assert.ok(repeated.length >= 8);
   for (const capture of evidence.captures) {
     assert.equal(capture.extensions[0], 'GREASE');
     assert.equal(capture.extensions[capture.resumed ? capture.extensions.length - 2 : capture.extensions.length - 1], 'GREASE');
@@ -255,8 +255,8 @@ function verifyEvidence(evidence) {
       capture.peetprint_hash,
       capture.resumed ? expected.resumedPeetprint : expected.freshPeetprint,
     );
-    assert(Number.isInteger(capture.tls_record_length) && capture.tls_record_length > 0);
-    assert(Number.isInteger(capture.clienthello_handshake_length) && capture.clienthello_handshake_length > 0);
+    assert.ok(Number.isInteger(capture.tls_record_length) && capture.tls_record_length > 0);
+    assert.ok(Number.isInteger(capture.clienthello_handshake_length) && capture.clienthello_handshake_length > 0);
     assert.equal(capture.tls_record_length, capture.clienthello_handshake_length + 4);
     assert.match(capture.clienthello_sha256, /^[0-9a-f]{64}$/);
   }
@@ -272,7 +272,7 @@ async function verifyPatchedSource(sourcePath) {
   const source = await fs.readFile(sourcePath, 'utf8');
   const start = source.indexOf('MTPTlsClientHello PrepareClientHelloRules_Chromium151');
   const end = source.indexOf('using Chromium151EndpointKey', start);
-  assert(start >= 0 && end > start, 'Chromium 151 production profile was not found');
+  assert.ok(start >= 0 && end > start, 'Chromium 151 production profile was not found');
   const profile = source.slice(start, end);
   const required = [
     '\\x13\\x01\\x13\\x02\\x13\\x03\\xc0\\x2b\\xc0\\x2f\\xc0\\x2c\\xc0\\x30\\xcc\\xa9',
@@ -300,10 +300,10 @@ async function verifyPatchedSource(sourcePath) {
     'R(32);',
   ];
   for (const token of required) {
-    assert(profile.includes(token), `production Chromium 151 profile drifted: ${token}`);
+    assert.ok(profile.includes(token), `production Chromium 151 profile drifted: ${token}`);
   }
   const compact = profile.replace(/\s+/g, '');
-  assert(compact.includes('}ClosePermutation();G(3);S("\\x00\\x01\\x00"_q);if(resumed){S("\\x00\\x29"_q);'));
+  assert.ok(compact.includes('}ClosePermutation();G(3);S("\\x00\\x01\\x00"_q);if(resumed){S("\\x00\\x29"_q);'));
 }
 
 async function startCaptureProxy() {
@@ -337,7 +337,7 @@ async function startCaptureProxy() {
         const length = 2 + pending[1];
         if (pending.length < length) return;
         assert.equal(pending[0], 5, 'SOCKS version');
-        assert(pending.subarray(2, length).includes(0), 'SOCKS no-auth method');
+        assert.ok(pending.subarray(2, length).includes(0), 'SOCKS no-auth method');
         pending = pending.subarray(length);
         client.write(Buffer.from([5, 0]));
         state = 'request';
@@ -423,11 +423,11 @@ async function captureSession(chromium, executablePath, proxy) {
         waitUntil: 'domcontentloaded',
         timeout: 60_000,
       });
-      assert(response && response.ok(), `${label}: HTTP ${response && response.status()}`);
+      assert.ok(response && response.ok(), `${label}: HTTP ${response && response.status()}`);
       const data = JSON.parse(await page.locator('body').innerText());
       const clientHello = proxy.hellos.slice(helloIndex).find((hello) =>
         hello.subarray(11, 43).toString('hex') === data.tls.client_random);
-      assert(clientHello, `${label}: no captured ClientHello matches the server observation`);
+      assert.ok(clientHello, `${label}: no captured ClientHello matches the server observation`);
       assert.equal(clientHello[0], 0x16);
       assert.equal(clientHello[5], 0x01);
       assert.equal(5 + readU16(clientHello, 3), clientHello.length);
@@ -467,7 +467,7 @@ async function main() {
   if (mode === '--capture') {
     const executablePath = process.argv[3];
     const outputPath = process.argv[4];
-    assert(executablePath && outputPath, 'usage: --capture CHROMIUM OUTPUT');
+    assert.ok(executablePath && outputPath, 'usage: --capture CHROMIUM OUTPUT');
     const { chromium } = require('playwright');
     const raw = [];
     const proxy = await startCaptureProxy();
