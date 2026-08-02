@@ -24,7 +24,7 @@ index 495bb0b..30d231f 100644
 +	case MTP::ProxyData::CHelloType::Custom:  return 2;
 +	case MTP::ProxyData::CHelloType::SafariMac: return 3;
 +	case MTP::ProxyData::CHelloType::YandexGost: return 4;
-+	case MTP::ProxyData::CHelloType::Chromium150: return 5;
++	case MTP::ProxyData::CHelloType::Chromium151: return 5;
 +	}
 +	return -1;
 +}
@@ -37,7 +37,7 @@ index 495bb0b..30d231f 100644
 +	case 2: return MTP::ProxyData::CHelloType::Custom;
 +	case 3: return MTP::ProxyData::CHelloType::SafariMac;
 +	case 4: return MTP::ProxyData::CHelloType::YandexGost;
-+	case 5: return MTP::ProxyData::CHelloType::Chromium150;
++	case 5: return MTP::ProxyData::CHelloType::Chromium151;
 +	}
 +	return MTP::ProxyData::CHelloType::RANDOM;
 +}
@@ -459,7 +459,7 @@ index 1f2ec5c..0b14ff1 100644
  	bool _checkIpWarningShown = false;
  	int _proxyRotationTimeout = kDefaultProxyRotationTimeout;
  	MTP::ProxyData::Settings _settings = MTP::ProxyData::Settings::System;
-+	MTP::ProxyData::CHelloType _ch_type = MTP::ProxyData::CHelloType::Chromium150;
++	MTP::ProxyData::CHelloType _ch_type = MTP::ProxyData::CHelloType::Chromium151;
 +	bool _proxySlowMode = false;
 +	int _proxySlowDelay = 250;
 +	int _proxySlowJitter = 150;

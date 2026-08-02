@@ -18,7 +18,7 @@ ClientHello, похожие на популярные браузеры, акку
 
 | № | Патч | Тема |
 |---:|---|---|
-| 1 | [`0001`](patches/0001-faketls-clienthello-profiles.diff) | Формирование ClientHello по профилям Chrome, Firefox, Safari, Yandex и Chromium; проверка длин и расширений перед отправкой; планировщик отложенных подключений вместо мгновенного TCP-всплеска; короткоживущее состояние TLS resumption для Chromium 150 отдельно для каждого прокси. Сюда же входит конструктор `tlsBlockPublicKeyP256` в TL-схеме. |
+| 1 | [`0001`](patches/0001-faketls-clienthello-profiles.diff) | Формирование ClientHello по профилям Chrome, Firefox, Safari, Yandex и Chromium; проверка длин и расширений перед отправкой; планировщик отложенных подключений вместо мгновенного TCP-всплеска; короткоживущее состояние TLS resumption для Chromium 151 отдельно для каждого прокси. Сюда же входит конструктор `tlsBlockPublicKeyP256` в TL-схеме. |
 | 2 | [`0002`](patches/0002-slow-connect-scheduling-and-faketls-detection.diff) | Единое правило распознавания FakeTLS во всех сетевых компонентах и общая политика расчёта задержки повторных соединений с ограничением суммарного времени ожидания. |
 | 3 | [`0003`](patches/0003-resolved-ip-health-and-quarantine.diff) | Учёт неудач отдельных IP-адресов одного прокси: перебор по кругу, карантин проблемных адресов, отделение ошибки конкретного IP от общей ошибки прокси, backoff снаружи соединения. |
 | 4 | [`0004`](patches/0004-proxy-check-coordinator.diff) | Общая очередь проверок прокси с лимитом одновременных проверок, выполнение координатора только в главном потоке, отмена проверки при уничтожении аккаунта или MTProto `Instance`. |
@@ -37,7 +37,10 @@ Workflow [`Validate MTProto patch series`](.github/workflows/validate-patch-seri
 3. контракты — регрессионные guard-ы на дефекты, которые уже чинились и не
    должны вернуться, плюс межфайловые и сборочные инварианты;
 4. компиляция и запуск C++20 policy-тестов **напрямую против production-заголовков**
-   из [`patches/tests`](patches/tests) с `-Werror -Wconversion -Wsign-conversion`.
+   из [`patches/tests`](patches/tests) с `-Werror -Wconversion -Wsign-conversion`;
+5. проверка зафиксированных fresh/resumed-захватов Chromium 151 и соответствия
+   production-профиля: состав ClientHello, JA4, PeetPrint, длины PSK
+   identity/binder, хеши сырых записей и закодированные блоки патча.
 
 Windows-сборка дополнительно компилирует те же тесты через MSVC и запускает
 `--validate-mtproto-client-hello` на собранном бинарнике, после чего
@@ -48,14 +51,13 @@ Windows-сборка дополнительно компилирует те же
 
 Это стоит понимать до использования.
 
-- **Профили ClientHello не подтверждены свежими захватами.** В
-  [`clienthello-profile-review.json`](patches/clienthello-profile-review.json) у
-  всех профилей стоит `capture_status: refresh-required`. Тесты проверяют
-  внутреннюю согласованность пакета — длины, состав и порядок расширений,
-  допустимые перестановки, — но **ни один тест не сравнивает результат с
-  эталонным JA3/JA4 реального браузера**. Пока такой проверки нет, совпадение с
-  браузером остаётся заявлением, а не измеренным фактом.
-- **Синтетический resumption у Chromium 150 отличим.** Он использует
+- **Кроме Chromium 151, профили ClientHello не подтверждены свежими
+  захватами.** Для Chrome/Telegram, Firefox, Safari и Yandex в
+  [`clienthello-profile-review.json`](patches/clienthello-profile-review.json)
+  по-прежнему стоит `capture_status: refresh-required`. Chromium 151 проверен
+  на двух чистых процессах: захват и регрессионные ожидания лежат в
+  [`patches/tests`](patches/tests).
+- **Синтетический resumption у Chromium 151 отличим.** Он использует
   фиксированную 113-байтную identity и не владеет билетом, выданным сервером;
   наблюдатель с состоянием это различит. Подробности и порядок обновления
   профилей — в [`CLIENTHELLO_PROFILE_MAINTENANCE.md`](patches/CLIENTHELLO_PROFILE_MAINTENANCE.md).

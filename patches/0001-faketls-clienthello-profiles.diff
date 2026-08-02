@@ -1386,7 +1386,7 @@ index 448190a..d0c1f95 100644
 +	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
 +}
 +
-+[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules_Chromium150(const bool resumed) {
++[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules_Chromium151(const bool resumed) {
  	using Scope = QVector<MTPTlsBlock>;
  	using Permutation = std::vector<Scope>;
  	using StackElement = std::variant<Scope, Permutation>;
@@ -1447,7 +1447,7 @@ index 448190a..d0c1f95 100644
  	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
  }
  
-+using Chromium150EndpointKey = std::tuple<QString, int, QByteArray>;
++using Chromium151EndpointKey = std::tuple<QString, int, QByteArray>;
 +
 +[[nodiscard]] QByteArray ClientHelloDomainId(const QByteArray &domain) {
 +	const auto hash = openssl::Sha256(bytes::make_span(domain));
@@ -1458,21 +1458,21 @@ index 448190a..d0c1f95 100644
 +
 +struct ClientHelloSelection {
 +	const MTPTlsClientHello *rules = nullptr;
-+	ProxyData::CHelloType configured = ProxyData::CHelloType::Chromium150;
-+	ProxyData::CHelloType actual = ProxyData::CHelloType::Chromium150;
++	ProxyData::CHelloType configured = ProxyData::CHelloType::Chromium151;
++	ProxyData::CHelloType actual = ProxyData::CHelloType::Chromium151;
 +	bool resumed = false;
 +};
 +
-+constexpr auto kMaximumChromium150EndpointStates = 128;
-+constexpr auto kChromium150TicketSlots = 2;
-+auto Chromium150Resumption = MTP::details::ChromiumResumptionCache<
-+	Chromium150EndpointKey>(
-+		kMaximumChromium150EndpointStates,
-+		kChromium150TicketSlots);
++constexpr auto kMaximumChromium151EndpointStates = 128;
++constexpr auto kChromium151TicketSlots = 2;
++auto Chromium151Resumption = MTP::details::ChromiumResumptionCache<
++	Chromium151EndpointKey>(
++		kMaximumChromium151EndpointStates,
++		kChromium151TicketSlots);
 +
-+[[nodiscard]] auto TakeChromium150Resumption(
-+		const Chromium150EndpointKey &key) {
-+	return Chromium150Resumption.takeWithRemaining(key);
++[[nodiscard]] auto TakeChromium151Resumption(
++		const Chromium151EndpointKey &key) {
++	return Chromium151Resumption.takeWithRemaining(key);
 +}
 +
 +void ConfirmClientHello(
@@ -1483,9 +1483,9 @@ index 448190a..d0c1f95 100644
 +		ProxyData::CHelloType actual,
 +		bool resumed) {
 +	auto ttlMinutes = 0;
-+	if (actual == ProxyData::CHelloType::Chromium150) {
-+		const auto key = Chromium150EndpointKey(address, port, domain);
-+		ttlMinutes = int(Chromium150Resumption.confirm(key, [] {
++	if (actual == ProxyData::CHelloType::Chromium151) {
++		const auto key = Chromium151EndpointKey(address, port, domain);
++		ttlMinutes = int(Chromium151Resumption.confirm(key, [] {
 +			return std::chrono::minutes(
 +				30 + QRandomGenerator::global()->bounded(31));
 +		}).count());
@@ -1498,7 +1498,7 @@ index 448190a..d0c1f95 100644
 +	status.port = port;
 +	status.domainId = ClientHelloDomainId(domain);
 +	status.random = (configured == ProxyData::CHelloType::RANDOM);
-+	status.chromium150 = (actual == ProxyData::CHelloType::Chromium150);
++	status.chromium151 = (actual == ProxyData::CHelloType::Chromium151);
 +	status.resumed = resumed;
 +	status.ttlMinutes = ttlMinutes;
 +	status.ttlLeftMinutes = ttlMinutes;
@@ -1512,7 +1512,7 @@ index 448190a..d0c1f95 100644
 +			ProxyData::CHelloType::Firefox,
 +			ProxyData::CHelloType::Chrome,
 +			ProxyData::CHelloType::Custom,
-+			ProxyData::CHelloType::Chromium150,
++			ProxyData::CHelloType::Chromium151,
 +		};
 +		if constexpr (Platform::IsMac()) {
 +			profiles.push_back(ProxyData::CHelloType::SafariMac);
@@ -1536,8 +1536,8 @@ index 448190a..d0c1f95 100644
 +	static MTPTlsClientHello chRules_custom  = PrepareClientHelloRules_Firefox(true);
 +	static MTPTlsClientHello chRules_safari  = PrepareClientHelloRules_SafariMac();
 +	static MTPTlsClientHello chRules_yandex  = PrepareClientHelloRules_YandexGost();
-+	static MTPTlsClientHello chRules_chromium150Fresh = PrepareClientHelloRules_Chromium150(false);
-+	static MTPTlsClientHello chRules_chromium150Resumed = PrepareClientHelloRules_Chromium150(true);
++	static MTPTlsClientHello chRules_chromium151Fresh = PrepareClientHelloRules_Chromium151(false);
++	static MTPTlsClientHello chRules_chromium151Resumed = PrepareClientHelloRules_Chromium151(true);
 +	const auto configured_ch_type = MTP::ProxyData::globalClientHelloRulesType();
 +	auto ch_type = configured_ch_type;
 +	if (ProxyData::CHelloType::RANDOM == ch_type) {
@@ -1565,9 +1565,9 @@ index 448190a..d0c1f95 100644
 +			return result(chRules_safari, ch_type);
 +		case ProxyData::CHelloType::YandexGost:
 +			return result(chRules_yandex, ch_type);
-+		case ProxyData::CHelloType::Chromium150: {
-+			const auto resumption = TakeChromium150Resumption(
-+				Chromium150EndpointKey(address, port, domain));
++		case ProxyData::CHelloType::Chromium151: {
++			const auto resumption = TakeChromium151Resumption(
++				Chromium151EndpointKey(address, port, domain));
 +			if (resumption.taken) {
 +				ProxyData::updateGlobalCHelloStatusLifetime(
 +					address,
@@ -1577,8 +1577,8 @@ index 448190a..d0c1f95 100644
 +			}
 +			return result(
 +				resumption.taken
-+					? chRules_chromium150Resumed
-+					: chRules_chromium150Fresh,
++					? chRules_chromium151Resumed
++					: chRules_chromium151Fresh,
 +				ch_type,
 +				resumption.taken);
 +		}
@@ -1829,8 +1829,8 @@ index 448190a..d0c1f95 100644
 +			|| !check(PrepareClientHelloRules_Firefox(true), 0, true)
 +			|| !check(PrepareClientHelloRules_SafariMac(), 0, false)
 +			|| !check(PrepareClientHelloRules_YandexGost(), 0, false)
-+			|| !check(PrepareClientHelloRules_Chromium150(false), 0, false)
-+			|| !check(PrepareClientHelloRules_Chromium150(true), 1, false)) {
++			|| !check(PrepareClientHelloRules_Chromium151(false), 0, false)
++			|| !check(PrepareClientHelloRules_Chromium151(true), 1, false)) {
 +			return false;
 +		}
 +	}
@@ -1847,7 +1847,7 @@ index 448190a..d0c1f95 100644
 +		return false;
 +	}
 +	auto sample = QByteArray();
-+	if (!check(PrepareClientHelloRules_Chromium150(true), 1, false, &sample)) {
++	if (!check(PrepareClientHelloRules_Chromium151(true), 1, false, &sample)) {
 +		return false;
 +	}
 +	const auto validateSample = [&](const QByteArray &data, std::size_t size) {
@@ -1915,7 +1915,7 @@ index 448190a..d0c1f95 100644
 +		*selection.rules,
 +		domain,
 +		keyFromSecret(),
-+		(selection.actual == ProxyData::CHelloType::Chromium150)
++		(selection.actual == ProxyData::CHelloType::Chromium151)
 +			? int(selection.resumed)
 +			: -1);
  	if (hello.data.isEmpty()) {

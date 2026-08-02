@@ -17,7 +17,7 @@ index 00c843e..5d8ee98 100644
 +"lng_proxy_firefox_permuted_profile" = "Mozilla Firefox 151 — permuted extensions";
 +"lng_proxy_safari_profile" = "Apple Safari 26.4 (macOS)";
 +"lng_proxy_yandex_gost_profile" = "Yandex Browser (GOST)";
-+"lng_proxy_chromium_profile" = "Chromium 150";
++"lng_proxy_chromium_profile" = "Chromium 151";
 +"lng_proxy_random_profile" = "Random for this app session";
 +"lng_proxy_firefox_profile" = "Mozilla Firefox 151";
 +"lng_proxy_ch_status_unused" = "Last connection\nNot used yet";
@@ -116,7 +116,7 @@ index 273a032..63b67e8 100644
 +		return tr::lng_proxy_safari_profile(tr::now);
 +	case ProxyData::CHelloType::YandexGost:
 +		return tr::lng_proxy_yandex_gost_profile(tr::now);
-+	case ProxyData::CHelloType::Chromium150:
++	case ProxyData::CHelloType::Chromium151:
 +		return tr::lng_proxy_chromium_profile(tr::now);
 +	case ProxyData::CHelloType::RANDOM:
 +		return tr::lng_proxy_random_profile(tr::now);
@@ -133,7 +133,7 @@ index 273a032..63b67e8 100644
 +	}
 +	const auto profile = ClientHelloName(status.actual);
 +	auto result = [&] {
-+		if (status.random && status.chromium150) {
++		if (status.random && status.chromium151) {
 +			return status.resumed
 +				? tr::lng_proxy_ch_status_random_resumed(
 +					tr::now,
@@ -148,7 +148,7 @@ index 273a032..63b67e8 100644
 +				tr::now,
 +				lt_profile,
 +				profile);
-+		} else if (status.chromium150) {
++		} else if (status.chromium151) {
 +			return status.resumed
 +				? tr::lng_proxy_ch_status_resumed(
 +					tr::now,
@@ -170,7 +170,7 @@ index 273a032..63b67e8 100644
 +			? original + u" → "_q + actual
 +			: actual);
 +	}
-+	if (status.chromium150 && status.ttlMinutes > 0) {
++	if (status.chromium151 && status.ttlMinutes > 0) {
 +		result += status.resumed
 +			? tr::lng_proxy_ch_status_refresh(
 +				tr::now,
@@ -546,7 +546,7 @@ index 273a032..63b67e8 100644
 +		const auto types = std::array{
 +			ProxyData::CHelloType::RANDOM,
 +			ProxyData::CHelloType::SafariMac,
-+			ProxyData::CHelloType::Chromium150,
++			ProxyData::CHelloType::Chromium151,
 +			ProxyData::CHelloType::Chrome,
 +			ProxyData::CHelloType::Firefox,
 +			ProxyData::CHelloType::Custom,

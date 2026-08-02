@@ -220,7 +220,7 @@ index f1f2c54..f7b7d82 100644
  		proxy.password);
  }
  
-+std::atomic<ProxyData::CHelloType> ProxyData::global_ch_type = ProxyData::CHelloType::Chromium150;
++std::atomic<ProxyData::CHelloType> ProxyData::global_ch_type = ProxyData::CHelloType::Chromium151;
 +std::atomic<bool> ProxyData::global_slow_mode = false;
 +std::atomic<int> ProxyData::global_slow_delay = 250;
 +std::atomic<int> ProxyData::global_slow_jitter = 150;
@@ -320,7 +320,7 @@ index f1f2c54..f7b7d82 100644
 +		return CHelloStatus();
 +	}
 +	auto result = newest->value;
-+	if (result.chromium150 && result.ttlLeftMinutes > 0) {
++	if (result.chromium151 && result.ttlLeftMinutes > 0) {
 +		const auto elapsedMinutes = std::clamp(
 +			(crl::now() - newest->ttlUpdatedAt) / crl::time(60 * 1000),
 +			crl::time(0),
@@ -442,17 +442,17 @@ index 367ee3f..ac0c056 100644
 +		Custom,
 +		SafariMac, // Safari macOS 26.4 (with grease/alpn randomization)
 +		YandexGost, // Yandex Browser with GOST cipher suites
-+		Chromium150, // Ungoogled Chromium 150-like, based on tls.peet.ws captures
++		Chromium151, // Ungoogled Chromium 151-like, based on tls.peet.ws captures
 +		RANDOM
 +	};
 +	struct CHelloStatus {
-+		CHelloType configured = CHelloType::Chromium150;
-+		CHelloType actual = CHelloType::Chromium150;
++		CHelloType configured = CHelloType::Chromium151;
++		CHelloType actual = CHelloType::Chromium151;
 +		QString host;
 +		uint32 port = 0;
 +		QByteArray domainId;
 +		bool random = false;
-+		bool chromium150 = false;
++		bool chromium151 = false;
 +		bool resumed = false;
 +		int ttlMinutes = 0;
 +		int ttlLeftMinutes = 0;

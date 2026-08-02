@@ -291,3 +291,12 @@ jobs:
               -o "test-bin/$name"
             "test-bin/$name"
           done
+
+      - name: Verify Chromium 151 capture evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          node patch-source/patches/tests/chromium151_capture_test.cjs \
+            --verify \
+            patch-source/patches/tests/chromium151_capture_evidence.json \
+            source/Telegram/SourceFiles/mtproto/details/mtproto_tls_socket.cpp
