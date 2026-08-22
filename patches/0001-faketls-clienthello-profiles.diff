@@ -1597,7 +1597,7 @@ index 448190a..d0c1f95 100644
  }
  
 -[[nodiscard]] bytes::vector GeneratePublicKey() {
--	const auto context = EVP_PKEY_CTX_new_id(NID_ED25519, nullptr);
+-	const auto context = EVP_PKEY_CTX_new_id(NID_X25519, nullptr);
 +[[nodiscard]] bytes::vector GenerateX25519PublicKey() {
 +	const auto context = EVP_PKEY_CTX_new_id(NID_X25519, nullptr);
  	if (!context) {
